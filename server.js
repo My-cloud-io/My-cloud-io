@@ -1,13 +1,5 @@
 "use strict";
 
-// Load local .env automatically when running from Termux/home server.
-// Node.js 20.12+ supports process.loadEnvFile(); this project targets Node 24+.
-try {
-  if (typeof process.loadEnvFile === "function") process.loadEnvFile(".env");
-} catch (error) {
-  console.warn("[Cloud-Zen] Could not load .env:", error?.message || error);
-}
-
 /*
   CLOUD-ZEN — private personal cloud
   Storage: Telegram MTProto user account (hidden from the UI)
@@ -17,12 +9,10 @@ try {
     closed before all chunks reach the server, the browser can cancel the
     remaining requests. No web app can guarantee continued transfer of bytes
     that the browser has stopped sending.
-  - Home-server mode: this process is intended to run directly in Termux/Node.js.
-  - Only temporary upload/download chunks are kept on local disk; persistent file
-    data is stored in the configured Telegram account via MTProto.
-  - This does not make a phone or internet connection permanently available: if
-    Android kills Termux, the phone is powered off, or the network is unavailable,
-    the web service will be unavailable until the process is running again.
+  - Render Free services have an ephemeral filesystem and may spin down after
+    15 minutes without inbound traffic. We therefore keep only one temporary
+    chunk on disk and persist the actual file data in Telegram. The service
+    can cold-start again and rebuild its index from Telegram.
 */
 
 const express = require("express");
@@ -66,7 +56,7 @@ const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 3;
 
 if (!APP_PASSWORD || !DELETE_PASSWORD || !SESSION_SECRET) {
-  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in .env.");
+  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in Render.");
 }
 if (!TELEGRAM_API_ID || !TELEGRAM_API_HASH || !TELEGRAM_SESSION) {
   console.warn("[Cloud-Zen] Telegram MTProto credentials are not fully configured.");
@@ -1008,8 +998,8 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 app.listen(PORT, HOST, () => {
-  console.log(`[Cloud-Zen] Home server running on http://${HOST}:${PORT}`);
+  console.log(`[Cloud-Zen] Server running on ${HOST}:${PORT}`);
   console.log(`[Cloud-Zen] Chunk size: ${formatBytes(CHUNK_SIZE)}`);
 });
 
-                            
+
