@@ -720,10 +720,6 @@ async function streamFileToResponse(req, res, meta, inline) {
   res.setHeader("Content-Type", mimeFor(meta.name));
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
-  if (mimeFor(meta.name) === "application/pdf" && inline) {
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
-  }
   res.setHeader("Cache-Control", "private, max-age=3600, stale-while-revalidate=86400");
   res.setHeader("Content-Length", String(end - start + 1));
   if (partial) res.setHeader("Content-Range", `bytes ${start}-${end}/${totalSize}`);
@@ -1017,4 +1013,4 @@ app.listen(PORT, HOST, () => {
   console.log(`[Cloud-Zen] Chunk size: ${formatBytes(CHUNK_SIZE)}`);
 });
 
-                             
+  
