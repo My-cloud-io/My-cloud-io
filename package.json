@@ -1,18 +1,21 @@
 {
   "name": "my-personal-cloud",
-  "version": "2.0.0",
+  "version": "4.0.0",
   "private": true,
-  "description": "My Personal Cloud home-server foundation",
+  "description": "My Personal Cloud - Termux home server with Telegram MTProto storage",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "healthcheck": "node --check server.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=24.0.0"
   },
   "dependencies": {
-    "dotenv": "16.4.7",
-    "express": "4.21.2"
+    "archiver": "^7.0.1",
+    "express": "^5.1.0",
+    "teleproto": "^1.229.0"
   }
 }
+
 
