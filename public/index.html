@@ -2871,22 +2871,28 @@ input[type="password"]::placeholder{
     font-size:18px !important;
     line-height:1;
 }
-.fileMenuWrap{
+ .fileMenuWrap{
     position:relative;
     flex:1;
 }
 .fileMenu{
-    position:absolute;
-    right:0;
-    bottom:calc(100% + 8px);
-    z-index:30;
-    min-width:180px;
-    padding:7px;
-    border:1px solid rgba(255,255,255,.12);
-    border-radius:15px;
-    background:rgba(10,22,37,.98);
-    box-shadow:0 20px 55px rgba(0,0,0,.42);
-    backdrop-filter:blur(18px);
+    position:fixed;
+    left:50%;
+    top:50%;
+    right:auto;
+    bottom:auto;
+    transform:translate(-50%,-50%);
+    z-index:1200;
+    width:min(220px, calc(100vw - 32px));
+    min-width:0;
+    max-height:calc(100vh - 32px);
+    overflow:auto;
+    padding:8px;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:16px;
+    background:rgba(10,22,37,.99);
+    box-shadow:0 24px 70px rgba(0,0,0,.55);
+    backdrop-filter:blur(20px);
     display:none;
 }
 .fileMenu.show{display:grid;gap:4px}
@@ -2909,6 +2915,17 @@ input[type="password"]::placeholder{
 .preview img{background:rgba(255,255,255,.025)}
 .viewerBox{max-height:92vh}
 #viewerContent iframe{height:min(78vh,900px)}
+@media (max-width:600px){
+    .fileMenu{
+        width:min(230px, calc(100vw - 28px));
+        max-height:calc(100vh - 28px);
+    }
+    .fileMenu button{
+        min-height:44px;
+        padding:11px 13px;
+        font-size:13px;
+    }
+}
 
 </style>
 
@@ -5396,8 +5413,25 @@ function createFileCard(
         event.stopPropagation();
         document.querySelectorAll(".fileMenu.show").forEach(el => { if(el !== menu) el.classList.remove("show"); });
         document.querySelectorAll(".fileCard.menuOpen").forEach(el => { if(el !== card) el.classList.remove("menuOpen"); });
-        menu.classList.toggle("show");
-        card.classList.toggle("menuOpen", menu.classList.contains("show"));
+
+        const opening = !menu.classList.contains("show");
+        menu.classList.toggle("show", opening);
+        card.classList.toggle("menuOpen", opening);
+
+        if(opening){
+            // Fixed positioning keeps the menu inside the phone viewport even when
+            // the card is near the screen edge or inside an overflow container.
+            const rect = more.getBoundingClientRect();
+            const menuHeight = Math.min(300, window.innerHeight - 32);
+            let top = rect.top - 8;
+            if(top - menuHeight < 16){
+                top = rect.bottom + 8 + menuHeight;
+            }
+            top = Math.max(16 + menuHeight, Math.min(window.innerHeight - 16, top));
+            menu.style.left = "50%";
+            menu.style.top = `${top}px`;
+            menu.style.transform = "translate(-50%, -100%)";
+        }
     });
 
     menuWrap.append(more, menu);
@@ -5954,10 +5988,14 @@ function openViewer(
                 "iframe"
             );
 
+        // Ask the browser's native PDF viewer to render the PDF inside the
+        // website modal instead of treating the file as a forced download.
         iframe.src =
-            url;
+            url + "#toolbar=1&navpanes=0&scrollbar=1&view=FitH";
         iframe.loading = "eager";
         iframe.referrerPolicy = "same-origin";
+        iframe.setAttribute("title", "PDF preview");
+        iframe.setAttribute("allowfullscreen", "true");
 
         viewerContent.appendChild(
             iframe
