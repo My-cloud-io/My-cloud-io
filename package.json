@@ -1,15 +1,16 @@
 {
-  "name": "my-personal-cloud",
-  "version": "4.0.0",
+  "name": "cloud-zen",
+  "version": "3.1.0",
   "private": true,
-  "description": "My Personal Cloud - Termux home server with Telegram MTProto storage",
+  "description": "Cloud-Zen Ultimate mobile-first private cloud workspace",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "telegram:session": "node telegram-session.js",
     "healthcheck": "node --check server.js"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": "24.x"
   },
   "dependencies": {
     "archiver": "^7.0.1",
@@ -17,5 +18,4 @@
     "teleproto": "^1.229.0"
   }
 }
-
 
