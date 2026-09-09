@@ -45,18 +45,18 @@ const TELEGRAM_API_HASH = String(process.env.TELEGRAM_API_HASH || "").trim();
 const TELEGRAM_SESSION = String(process.env.TELEGRAM_SESSION || "").trim();
 const TELEGRAM_STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || "me").trim();
 
-const CHUNK_SIZE = Math.max(
-  4 * 1024 * 1024,
-  Math.min(Number(process.env.CHUNK_SIZE || 64 * 1024 * 1024), 512 * 1024 * 1024)
-);
-const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 20 * 1024 * 1024 * 1024 * 1024);
+// Vercel-safe request size: keep each browser request below Vercel's function body limit.
+// Do not increase this for Vercel deployments.
+const CHUNK_SIZE = 4 * 1024 * 1024;
+// 1 TiB logical per-file limit. Actual Telegram account limits are controlled by Telegram.
+const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 1 * 1024 * 1024 * 1024 * 1024);
 const MAX_CHUNKS = 100000;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 3;
 
 if (!APP_PASSWORD || !DELETE_PASSWORD || !SESSION_SECRET) {
-  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in Render.");
+  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in Vercel Environment Variables.");
 }
 if (!TELEGRAM_API_ID || !TELEGRAM_API_HASH || !TELEGRAM_SESSION) {
   console.warn("[Cloud-Zen] Telegram MTProto credentials are not fully configured.");
@@ -997,8 +997,13 @@ async function shutdown(signal) {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
-app.listen(PORT, HOST, () => {
-  console.log(`[Cloud-Zen] Server running on ${HOST}:${PORT}`);
-  console.log(`[Cloud-Zen] Chunk size: ${formatBytes(CHUNK_SIZE)}`);
-});
+// Vercel loads this file as a serverless function. Keep local/server deployments working too.
+if (!process.env.VERCEL) {
+  app.listen(PORT, HOST, () => {
+    console.log(`[Cloud-Zen] Server running on ${HOST}:${PORT}`);
+    console.log(`[Cloud-Zen] Chunk size: ${formatBytes(CHUNK_SIZE)}`);
+  });
+}
+
+module.exports = app;
   
