@@ -1514,6 +1514,212 @@ input[type="password"]::placeholder{
 
 
 /* =========================================================
+   MULTI-STORAGE DETAILS — ADDED WITHOUT REMOVING ORIGINAL UI
+========================================================= */
+
+.storageDetailsCard{
+
+    margin-top:14px;
+
+    padding:18px;
+
+    border:
+        1px solid
+        var(--line);
+
+    border-radius:22px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(24,44,68,.62),
+            rgba(10,22,36,.58)
+        );
+
+    backdrop-filter:blur(18px);
+
+    -webkit-backdrop-filter:blur(18px);
+}
+
+.storageDetailsHead{
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:space-between;
+
+    gap:12px;
+
+    margin-bottom:12px;
+}
+
+.storageDetailsTitle{
+
+    margin:0;
+
+    font-size:14px;
+
+    font-weight:900;
+}
+
+.storageDetailsSub{
+
+    margin:4px 0 0;
+
+    color:#8193a9;
+
+    font-size:11px;
+}
+
+.storageDetailsRefresh{
+
+    border:1px solid var(--line);
+
+    background:rgba(255,255,255,.045);
+
+    color:#dbe5f2;
+
+    border-radius:11px;
+
+    padding:8px 11px;
+
+    cursor:pointer;
+
+    font-size:11px;
+
+    font-weight:800;
+}
+
+.storageProviderGrid{
+
+    display:grid;
+
+    grid-template-columns:repeat(3,minmax(0,1fr));
+
+    gap:10px;
+}
+
+.storageProvider{
+
+    min-width:0;
+
+    padding:13px;
+
+    border:1px solid rgba(255,255,255,.08);
+
+    border-radius:16px;
+
+    background:rgba(255,255,255,.028);
+}
+
+.storageProviderTop{
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:space-between;
+
+    gap:8px;
+}
+
+.storageProviderName{
+
+    font-size:12px;
+
+    font-weight:900;
+
+    overflow:hidden;
+
+    text-overflow:ellipsis;
+
+    white-space:nowrap;
+}
+
+.storageProviderPercent{
+
+    font-size:11px;
+
+    font-weight:900;
+
+    color:var(--blue);
+}
+
+.storageProviderBar{
+
+    height:6px;
+
+    margin-top:10px;
+
+    overflow:hidden;
+
+    border-radius:99px;
+
+    background:rgba(255,255,255,.07);
+}
+
+.storageProviderFill{
+
+    width:0%;
+
+    height:100%;
+
+    border-radius:99px;
+
+    background:linear-gradient(90deg,#75c4ff,#a9a0ff,#9eeaff);
+
+    transition:width .35s ease;
+}
+
+.storageProviderMeta{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    gap:8px;
+
+    margin-top:8px;
+
+    color:#8295ac;
+
+    font-size:10px;
+}
+
+.storageProviderStatus{
+
+    margin-top:7px;
+
+    color:#7ee7b2;
+
+    font-size:10px;
+}
+
+.storageProviderStatus.offline{
+    color:#ff9eb8;
+}
+
+.storageProviderStatus.unconfigured{
+    color:#ffd978;
+}
+
+@media(max-width:760px){
+
+    .storageProviderGrid{
+        grid-template-columns:repeat(2,minmax(0,1fr));
+    }
+}
+
+@media(max-width:470px){
+
+    .storageProviderGrid{
+        grid-template-columns:1fr;
+    }
+}
+
+
+/* =========================================================
    TOOLBAR
 ========================================================= */
 
@@ -1829,6 +2035,15 @@ input[type="password"]::placeholder{
     gap:10px;
 
     margin-top:16px;
+}
+
+.queueRemaining{
+
+    margin-top:5px;
+
+    color:#8295ac;
+
+    font-size:10px;
 }
 
 .queueItem{
@@ -2756,6 +2971,22 @@ input[type="password"]::placeholder{
 
 @media(max-width:450px){
 
+    .topbar{
+        align-items:flex-start;
+    }
+
+    .topActions{
+        flex-wrap:wrap;
+        justify-content:flex-end;
+        max-width:180px;
+    }
+
+    .iconButton,
+    .logout{
+        min-width:40px;
+        min-height:40px;
+    }
+
     .loginCard{
 
         width:92%;
@@ -2861,55 +3092,26 @@ input[type="password"]::placeholder{
 }
 
 
-/* =========================================================
-   FINAL FILE MENU / SMOOTH UI UPGRADES
-========================================================= */
-.moreButton{
-    min-width:42px;
-    width:42px;
-    padding:9px 0 !important;
-    font-size:18px !important;
-    line-height:1;
-}
-.fileMenuWrap{
-    position:relative;
-    flex:1;
-}
-.fileMenu{
-    position:absolute;
-    right:0;
-    bottom:calc(100% + 8px);
-    z-index:30;
-    min-width:180px;
-    padding:7px;
-    border:1px solid rgba(255,255,255,.12);
-    border-radius:15px;
-    background:rgba(10,22,37,.98);
-    box-shadow:0 20px 55px rgba(0,0,0,.42);
-    backdrop-filter:blur(18px);
-    display:none;
-}
-.fileMenu.show{display:grid;gap:4px}
-.fileMenu button{
-    width:100%;
-    padding:10px 12px;
-    border:0;
-    border-radius:10px;
-    color:#eaf2fb;
-    background:transparent;
-    text-align:left;
-    cursor:pointer;
-    font-size:12px;
-    font-weight:750;
-}
-.fileMenu button:hover{background:rgba(255,255,255,.08)}
-.fileMenu button.danger{color:#ff9eb9}
-.fileMenu button.primary{color:#8fc8ff}
-.fileCard.menuOpen{z-index:40}
-.preview img{background:rgba(255,255,255,.025)}
-.viewerBox{max-height:92vh}
-#viewerContent iframe{height:min(78vh,900px)}
 
+/* =========================================================
+   UI UPGRADE — STORAGE ACCORDION + QUICK ACTION MENU
+   Added only; original styles and elements remain intact.
+========================================================= */
+.storageDetailsCard.storageCompact .storageProviderGrid{display:none;}
+.storageDetailsCard.storageCompact .storageDetailsHead{margin-bottom:0;}
+.storageAccordionButton{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:38px;border:1px solid var(--line);background:rgba(255,255,255,.045);color:#dbe5f2;border-radius:11px;padding:8px 11px;cursor:pointer;font-size:11px;font-weight:850;white-space:nowrap;transition:transform .18s ease,background .18s ease;}
+.storageAccordionButton:hover{background:rgba(255,255,255,.08);transform:translateY(-1px);}
+.storageAccordionButton .accordionChevron{display:inline-block;transition:transform .22s ease;}
+.fileActions{position:relative;}
+.fileActions .fileMoreButton{display:flex;align-items:center;justify-content:center;width:100%;min-height:38px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.045);color:#dbe5f2;border-radius:12px;cursor:pointer;font-size:18px;font-weight:900;line-height:1;letter-spacing:2px;transition:background .18s ease,transform .18s ease;}
+.fileActions .fileMoreButton:hover{background:rgba(255,255,255,.09);transform:translateY(-1px);}
+.fileActions .fileAction{display:none;}
+.fileCard.quickActionsOpen .fileActions .fileAction{display:block;}
+.fileCard.quickActionsOpen .fileActions .fileMoreButton{display:none;}
+.fileCard:not(.quickActionsOpen) .deleteRow{display:none !important;}
+.fileCard.quickActionsOpen .deleteRow{display:flex !important;}
+@media(max-width:760px){.storageProviderGrid{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(220px,82%);overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;padding-bottom:4px;-webkit-overflow-scrolling:touch;}.storageProvider{scroll-snap-align:start;}}
+@media(max-width:470px){.storageAccordionButton{padding:8px 9px;}}
 </style>
 
 
@@ -3094,6 +3296,15 @@ input[type="password"]::placeholder{
 
 
                 <button
+                    id="downloadAllButton"
+                    class="iconButton qrButton"
+                    title="Download all files from all connected storages as one ZIP"
+                >
+                    ↓ All
+                </button>
+
+
+                <button
                     id="logoutButton"
                     class="logout"
                 >
@@ -3155,6 +3366,44 @@ input[type="password"]::placeholder{
                 </span>
 
             </div>
+
+        </section>
+
+
+        <section
+            id="storageDetailsCard"
+            class="storageDetailsCard"
+        >
+
+            <div class="storageDetailsHead">
+
+                <div>
+
+                    <h2 class="storageDetailsTitle">
+                        Storage Locations
+                    </h2>
+
+                    <p class="storageDetailsSub">
+                        See used space and free space for every connected cloud.
+                    </p>
+
+                </div>
+
+                <button
+                    id="storageDetailsRefresh"
+                    class="storageDetailsRefresh"
+                    type="button"
+                >
+                    Refresh
+                </button>
+
+            </div>
+
+
+            <div
+                id="storageProviderGrid"
+                class="storageProviderGrid"
+            ></div>
 
         </section>
 
@@ -3915,6 +4164,21 @@ const storageRemaining =
         "storageRemaining"
     );
 
+const storageProviderGrid =
+    document.getElementById(
+        "storageProviderGrid"
+    );
+
+const storageDetailsRefresh =
+    document.getElementById(
+        "storageDetailsRefresh"
+    );
+
+const downloadAllButton =
+    document.getElementById(
+        "downloadAllButton"
+    );
+
 const searchInput =
     document.getElementById(
         "searchInput"
@@ -3966,21 +4230,6 @@ const qrCode =
 ========================================================= */
 
 let allFiles = [];
-const FILES_CACHE_KEY = "cloudzen_files_cache_v4";
-const STORAGE_CACHE_KEY = "cloudzen_storage_cache_v4";
-
-function readCache(key){
-    try{
-        const raw = localStorage.getItem(key);
-        if(!raw) return null;
-        const data = JSON.parse(raw);
-        return data && typeof data === "object" ? data : null;
-    }catch(_){ return null; }
-}
-
-function writeCache(key, value){
-    try{ localStorage.setItem(key, JSON.stringify(value)); }catch(_){ }
-}
 
 let activeTab = "all";
 
@@ -4400,7 +4649,7 @@ async function showDashboard(){
         "show"
     );
 
-    loadEverything().catch(console.error);
+    await loadEverything();
 }
 
 
@@ -4630,53 +4879,334 @@ window.cloudLogout =
 ========================================================= */
 
 async function loadStorage(){
-    const cached = readCache(STORAGE_CACHE_KEY);
-    if(cached){
-        storageNumber.textContent = `${cached.usedText} / ${cached.limitText}`;
-        storagePercent.textContent = `${cached.usedPercent}%`;
-        storageBar.style.width = `${Math.min(100, Number(cached.usedPercent) || 0)}%`;
-        storageUsed.textContent = `Used: ${cached.usedText}`;
-        storageRemaining.textContent = `Free: ${cached.remainingText}`;
+
+    const data =
+        await api(
+            "/api/storage"
+        );
+
+
+    storageNumber.textContent =
+        `${data.usedText} / ${data.limitText}`;
+
+
+    storagePercent.textContent =
+        `${data.usedPercent}%`;
+
+
+    storageBar.style.width =
+        `${Math.min(
+            100,
+            Number(
+                data.usedPercent
+            ) || 0
+        )}%`;
+
+
+    storageUsed.textContent =
+        `Used: ${data.usedText}`;
+
+
+    storageRemaining.textContent =
+        `Free: ${data.remainingText}`;
+
+
+    renderStorageProviders(data);
+}
+
+
+function renderStorageProviders(data){
+
+    if(!storageProviderGrid){
+        return;
     }
 
-    try{
-        const data = await api("/api/storage", { cache:"no-store" });
-        writeCache(STORAGE_CACHE_KEY, data);
-        storageNumber.textContent = `${data.usedText} / ${data.limitText}`;
-        storagePercent.textContent = `${data.usedPercent}%`;
-        storageBar.style.width = `${Math.min(100, Number(data.usedPercent) || 0)}%`;
-        storageUsed.textContent = `Used: ${data.usedText}`;
-        storageRemaining.textContent = `Free: ${data.remainingText}`;
-    }catch(error){
-        if(!cached) throw error;
-        console.warn("Storage refresh delayed:", error);
-    }
+
+    const providers = [
+
+        {
+            key:"b2",
+            name:"Backblaze B2",
+            data:data.b2 || {}
+        },
+
+        {
+            key:"mega",
+            name:"MEGA",
+            data:data.mega || {}
+        },
+
+        {
+            key:"idriveE2",
+            name:"IDrive E2",
+            data:data.idriveE2 || {}
+        },
+
+        {
+            key:"cloudinary",
+            name:"Cloudinary",
+            data:data.cloudinary || {}
+        },
+
+        {
+            key:"filebase",
+            name:"Filebase",
+            data:data.filebase || {}
+        },
+
+        {
+            key:"koofr",
+            name:"Koofr",
+            data:data.koofr || {}
+        }
+    ];
+
+
+    storageProviderGrid.innerHTML = "";
+
+
+    providers.forEach(provider => {
+
+        const item =
+            document.createElement("div");
+
+        item.className =
+            "storageProvider";
+
+
+        const configured =
+            provider.data.configured !== false;
+
+        const connected =
+            provider.data.connected !== false;
+
+        const used =
+            Number(
+                provider.data.usedBytes ??
+                provider.data.totalBytes ??
+                0
+            );
+
+        const capacity =
+            Number(
+                provider.data.capacityBytes ??
+                provider.data.limitBytes ??
+                0
+            );
+
+        const remaining =
+            Number(
+                provider.data.remainingBytes ??
+                Math.max(0, capacity - used)
+            );
+
+        const percent =
+            capacity > 0
+                ? Math.min(
+                    100,
+                    (used / capacity) * 100
+                )
+                : 0;
+
+        const safePercent =
+            Number(percent.toFixed(2));
+
+        let statusText = "Connected";
+        let statusClass = "";
+
+        if(!configured){
+            statusText = "Not configured";
+            statusClass = "unconfigured";
+        }else if(!connected){
+            statusText = "Not connected";
+            statusClass = "offline";
+        }else if(safePercent >= 99.5){
+            statusText = "Near storage limit";
+            statusClass = "offline";
+        }
+
+
+        item.innerHTML = `
+            <div class="storageProviderTop">
+                <div class="storageProviderName">
+                    ${escapeHtml(provider.name)}
+                </div>
+                <div class="storageProviderPercent">
+                    ${configured ? safePercent : 0}%
+                </div>
+            </div>
+
+            <div class="storageProviderBar">
+                <div
+                    class="storageProviderFill"
+                    style="width:${configured ? safePercent : 0}%"
+                ></div>
+            </div>
+
+            <div class="storageProviderMeta">
+                <span>Used: ${escapeHtml(
+                    provider.data.usedText ||
+                    formatClientBytes(used)
+                )}</span>
+                <span>Free: ${escapeHtml(
+                    provider.data.remainingText ||
+                    formatClientBytes(remaining)
+                )}</span>
+            </div>
+
+            <div class="storageProviderStatus ${statusClass}">
+                ${escapeHtml(statusText)}
+            </div>
+        `;
+
+        storageProviderGrid.appendChild(item);
+    });
 }
+
+
+function formatClientBytes(bytes){
+
+    const value = Number(bytes) || 0;
+
+    if(value <= 0){
+        return "0 B";
+    }
+
+    const units = ["B","KB","MB","GB","TB"];
+
+    const index = Math.min(
+        units.length - 1,
+        Math.floor(
+            Math.log(value) /
+            Math.log(1024)
+        )
+    );
+
+    return `${(
+        value /
+        Math.pow(1024,index)
+    ).toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
+}
+
+
+
+/* =========================================================
+   STORAGE ACCORDION — COLLAPSE LONG PROVIDER LIST
+========================================================= */
+(function initStorageAccordion(){
+    const detailsCard = document.getElementById("storageDetailsCard");
+    const head = detailsCard?.querySelector(".storageDetailsHead");
+    if(!detailsCard || !head) return;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "storageAccordionButton";
+    button.innerHTML = `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`;
+
+    button.addEventListener("click", () => {
+        const collapsed = detailsCard.classList.toggle("storageCompact");
+        button.innerHTML = collapsed
+            ? `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`
+            : `Hide <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌃</span>`;
+    });
+
+    head.appendChild(button);
+    detailsCard.classList.add("storageCompact");
+})();
+
+storageDetailsRefresh?.addEventListener(
+    "click",
+    async () => {
+        try{
+            storageDetailsRefresh.disabled = true;
+            storageDetailsRefresh.textContent = "Loading...";
+            await loadStorage();
+        }catch(error){
+            console.error(error);
+            showToast(
+                error.message ||
+                "Could not refresh storage"
+            );
+        }finally{
+            storageDetailsRefresh.disabled = false;
+            storageDetailsRefresh.textContent = "Refresh";
+        }
+    }
+);
+
+
+downloadAllButton?.addEventListener(
+    "click",
+    () => {
+
+        const confirmed =
+            window.confirm(
+                "Download all files from every connected storage as one ZIP? Large clouds may take a long time and the ZIP can be very large."
+            );
+
+        if(!confirmed){
+            return;
+        }
+
+        const a =
+            document.createElement("a");
+
+        a.href =
+            "/api/download-all";
+
+        a.download =
+            "my-personal-cloud-all-storage.zip";
+
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    }
+);
+
+
 
 /* =========================================================
    FILES
 ========================================================= */
 
 async function loadFiles(){
-    const cached = readCache(FILES_CACHE_KEY);
-    if(cached && Array.isArray(cached.files)){
-        allFiles = cached.files;
-        renderFiles();
-    }else if(!allFiles.length){
-        fileList.innerHTML = `<div class="empty"><div class="emptyIcon">☁</div>Loading your cloud...</div>`;
-    }
+
+    fileList.innerHTML =
+        `
+        <div class="empty">
+            <div class="emptyIcon">☁</div>
+            Loading your cloud...
+        </div>
+        `;
+
 
     try{
-        const files = await api("/api/files", { cache:"no-store" });
-        allFiles = Array.isArray(files) ? files : [];
-        writeCache(FILES_CACHE_KEY, { files: allFiles, savedAt: Date.now() });
+
+        const files =
+            await api(
+                "/api/files"
+            );
+
+
+        allFiles =
+            Array.isArray(files)
+                ? files
+                : [];
+
+
         renderFiles();
+
     }catch(error){
-        if(!cached && !allFiles.length){
-            fileList.innerHTML = `<div class="empty"><div class="emptyIcon">⚠</div>${escapeHtml(error.message)}</div>`;
-        }else{
-            console.warn("File refresh delayed:", error);
-        }
+
+        fileList.innerHTML =
+            `
+            <div class="empty">
+                <div class="emptyIcon">⚠</div>
+                ${escapeHtml(
+                    error.message
+                )}
+            </div>
+            `;
     }
 }
 
@@ -5353,60 +5883,197 @@ function createFileCard(
     );
 
 
-    const actions = document.createElement("div");
-    actions.className = "fileActions";
+    const actions =
+        document.createElement(
+            "div"
+        );
 
-    const menuWrap = document.createElement("div");
-    menuWrap.className = "fileMenuWrap";
+    actions.className =
+        "fileActions";
 
-    const more = document.createElement("button");
-    more.className = "fileAction moreButton";
-    more.type = "button";
-    more.textContent = "⋮";
-    more.title = "File actions";
 
-    const menu = document.createElement("div");
-    menu.className = "fileMenu";
+    const open =
+        document.createElement(
+            "button"
+        );
 
-    const addMenuItem = (label, handler, cls="") => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = label;
-        if(cls) button.classList.add(cls);
-        button.addEventListener("click", event => {
+    open.className =
+        "fileAction";
+
+    open.textContent =
+        canPreview(type)
+            ? "Open"
+            : "Info";
+
+
+    open.addEventListener(
+        "click",
+        () => {
+
+            rememberRecent(
+                file.name
+            );
+
+            if(
+                canPreview(type)
+            ){
+
+                openViewer(
+                    file
+                );
+
+            }else{
+
+                downloadFile(
+                    file.name
+                );
+            }
+        }
+    );
+
+
+    const download =
+        document.createElement(
+            "button"
+        );
+
+    download.className =
+        "fileAction";
+
+    download.textContent =
+        "Download";
+
+
+    download.addEventListener(
+        "click",
+        () => {
+
+            rememberRecent(
+                file.name
+            );
+
+            downloadFile(
+                file.name
+            );
+        }
+    );
+
+
+    const share =
+        document.createElement(
+            "button"
+        );
+
+    share.className =
+        "fileAction";
+
+    share.textContent =
+        "Share";
+
+
+    share.addEventListener(
+        "click",
+        () => {
+
+            rememberRecent(
+                file.name
+            );
+
+            shareFile(
+                file
+            );
+        }
+    );
+
+
+    const del =
+        document.createElement(
+            "button"
+        );
+
+    del.className =
+        "fileAction delete";
+
+    del.textContent =
+        "Delete";
+
+
+    del.addEventListener(
+        "click",
+        () =>
+            deleteFile(
+                file.name
+            )
+    );
+
+
+    const more =
+        document.createElement(
+            "button"
+        );
+
+    more.className =
+        "fileMoreButton";
+
+    more.type =
+        "button";
+
+    more.title =
+        "More actions";
+
+    more.setAttribute(
+        "aria-label",
+        "More actions"
+    );
+
+    more.textContent =
+        "•••";
+
+    more.addEventListener(
+        "click",
+        event => {
             event.stopPropagation();
-            menu.classList.remove("show");
-            card.classList.remove("menuOpen");
-            handler();
-        });
-        menu.appendChild(button);
-    };
+            card.classList.toggle(
+                "quickActionsOpen"
+            );
+        }
+    );
 
-    addMenuItem(canPreview(type) ? "Open" : "Open / Download", () => {
-        rememberRecent(file.name);
-        if(canPreview(type)) openViewer(file);
-        else downloadFile(file.name);
-    }, "primary");
-    addMenuItem("Share", () => { rememberRecent(file.name); shareFile(file); });
-    addMenuItem("Download", () => { rememberRecent(file.name); downloadFile(file.name); });
-    addMenuItem("Rename", () => renameFile(file));
-    addMenuItem("Delete", () => deleteFile(file.name), "danger");
+    actions.append(
+        open,
+        download,
+        share,
+        more
+    );
 
-    more.addEventListener("click", event => {
-        event.stopPropagation();
-        document.querySelectorAll(".fileMenu.show").forEach(el => { if(el !== menu) el.classList.remove("show"); });
-        document.querySelectorAll(".fileCard.menuOpen").forEach(el => { if(el !== card) el.classList.remove("menuOpen"); });
-        menu.classList.toggle("show");
-        card.classList.toggle("menuOpen", menu.classList.contains("show"));
-    });
 
-    menuWrap.append(more, menu);
-    actions.appendChild(menuWrap);
+    const deleteRow =
+        document.createElement(
+            "div"
+        );
 
-    const deleteRow = document.createElement("div");
-    deleteRow.style.display = "none";
+    deleteRow.style.marginTop =
+        "7px";
 
-    info.append(name, meta, actions, deleteRow);
+    deleteRow.style.display =
+        "flex";
+
+
+    deleteRow.appendChild(
+        del
+    );
+
+
+    del.style.width =
+        "100%";
+
+
+    info.append(
+        name,
+        meta,
+        actions,
+        deleteRow
+    );
 
 
     card.append(
@@ -5415,14 +6082,29 @@ function createFileCard(
     );
 
 
+    let longPressTimer = null;
+
+    const startLongPress = event => {
+        if(event.pointerType === "mouse") return;
+        clearTimeout(longPressTimer);
+        longPressTimer = setTimeout(() => {
+            card.classList.add("quickActionsOpen");
+        }, 520);
+    };
+
+    const cancelLongPress = () => {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+    };
+
+    card.addEventListener("pointerdown", startLongPress, {passive:true});
+    card.addEventListener("pointerup", cancelLongPress);
+    card.addEventListener("pointercancel", cancelLongPress);
+    card.addEventListener("pointerleave", cancelLongPress);
+
     return card;
 }
 
-
-document.addEventListener("click", () => {
-    document.querySelectorAll(".fileMenu.show").forEach(el => el.classList.remove("show"));
-    document.querySelectorAll(".fileCard.menuOpen").forEach(el => el.classList.remove("menuOpen"));
-});
 
 /* =========================================================
    STAR
@@ -5504,53 +6186,70 @@ function rememberRecent(
    SHARE
 ========================================================= */
 
-async function shareFile(file){
-    try{
-        const data = await api("/api/share", {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({name:file.name, ttlSeconds:86400})
-        });
-        const url = data.url;
-        if(navigator.share){
-            try{
-                await navigator.share({title:file.name, text:`Shared from My Personal Cloud: ${file.name}`, url});
+async function shareFile(
+    file
+){
+
+    const url =
+        new URL(
+            streamUrl(
+                file.name
+            ),
+            window.location.origin
+        ).href;
+
+
+    if(
+        navigator.share
+    ){
+
+        try{
+
+            await navigator.share({
+
+                title:
+                    file.name,
+
+                text:
+                    `Shared from My Personal Cloud: ${file.name}`,
+
+                url
+            });
+
+            return;
+
+        }catch(error){
+
+            if(
+                error?.name ===
+                "AbortError"
+            ){
+
                 return;
-            }catch(error){
-                if(error?.name === "AbortError") return;
             }
         }
-        await navigator.clipboard.writeText(url);
-        showToast("Secure share link copied");
-    }catch(error){
-        alert(error.message || "Could not create share link");
+    }
+
+
+    try{
+
+        await navigator.clipboard.writeText(
+            url
+        );
+
+        showToast(
+            "File link copied"
+        );
+
+    }catch(_){
+
+        prompt(
+            "Copy this file link:",
+            url
+        );
     }
 }
 
-async function renameFile(file){
-    const current = file.name;
-    let next = prompt("Enter the new file name:", current);
-    if(next === null) return;
-    next = next.trim();
-    if(!next || next === current) return;
-    if(!/\.[a-z0-9]{1,10}$/i.test(next)){
-        const ext = current.match(/\.[a-z0-9]{1,10}$/i);
-        if(ext) next += ext[0];
-    }
-    try{
-        const data = await api("/api/files", {
-            method:"PATCH",
-            headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({name:current,newName:next})
-        });
-        allFiles = allFiles.map(item => item.name === current ? data.file : item);
-        writeCache(FILES_CACHE_KEY, {files:allFiles, savedAt:Date.now()});
-        renderFiles();
-        showToast("File renamed");
-    }catch(error){
-        alert(error.message || "Rename failed");
-    }
-}
 
 /* =========================================================
    PREVIEW
@@ -5956,8 +6655,6 @@ function openViewer(
 
         iframe.src =
             url;
-        iframe.loading = "eager";
-        iframe.referrerPolicy = "same-origin";
 
         viewerContent.appendChild(
             iframe
@@ -5986,36 +6683,81 @@ function closeViewer(){
    DELETE
 ========================================================= */
 
-async function deleteFile(name){
-    const ok = confirm(`Delete "${name}" permanently?`);
-    if(!ok) return;
+async function deleteFile(
+    name
+){
 
-    const deletePassword = prompt("Enter your delete password:");
-    if(deletePassword === null) return;
-    if(!deletePassword.trim()){
-        alert("Delete password is required.");
+    const ok =
+        confirm(
+            `Delete "${name}" permanently?`
+        );
+
+
+    if(!ok){
         return;
     }
 
+
     try{
-        await api("/api/files", {
-            method:"DELETE",
-            headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({name, deletePassword})
-        });
-        starred.delete(name);
-        recent = recent.filter(item => item !== name);
-        writeJSON(STAR_KEY, [...starred]);
-        writeJSON(RECENT_KEY, recent);
-        allFiles = allFiles.filter(item => item.name !== name);
-        writeCache(FILES_CACHE_KEY, {files:allFiles, savedAt:Date.now()});
-        renderFiles();
-        showToast("File deleted");
-        loadEverything().catch(() => {});
+
+        await api(
+            "/api/files",
+            {
+
+                method:"DELETE",
+
+                headers:{
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify({
+                        name
+                    })
+            }
+        );
+
+
+        starred.delete(
+            name
+        );
+
+
+        writeJSON(
+            STAR_KEY,
+            [...starred]
+        );
+
+
+        recent =
+            recent.filter(
+                item =>
+                    item !== name
+            );
+
+
+        writeJSON(
+            RECENT_KEY,
+            recent
+        );
+
+
+        showToast(
+            "File deleted"
+        );
+
+
+        await loadEverything();
+
     }catch(error){
-        alert(error.message || "Delete failed");
+
+        alert(
+            error.message
+        );
     }
 }
+
 
 /* =========================================================
    UPLOAD INPUT
@@ -6167,70 +6909,276 @@ async function uploadFiles(
    CHUNK UPLOAD
 ========================================================= */
 
-// Keep uploads below Vercel's function request limit.
-const CHUNK_SIZE = 4 * 1024 * 1024;
+const CHUNK_SIZE =
+    100 * 1024 * 1024;
 
-function uploadChunkXHR(url, blob, onProgress){
-    return new Promise((resolve,reject)=>{
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", url, true);
-        xhr.withCredentials = true;
-        xhr.timeout = 240000;
-        xhr.setRequestHeader("Content-Type", "application/octet-stream");
-        xhr.upload.onprogress = event => {
-            if(event.lengthComputable) onProgress(event.loaded / event.total);
-        };
-        xhr.onload = () => {
-            let data = null;
-            try{ data = JSON.parse(xhr.responseText || "{}"); }catch(_){}
-            if(xhr.status === 401){ showLogin(); reject(new Error("Session expired")); return; }
-            if(xhr.status < 200 || xhr.status >= 300){ reject(new Error(data?.error || `Upload failed (${xhr.status})`)); return; }
-            resolve(data);
-        };
-        xhr.onerror = () => reject(new Error("Network error while uploading chunk"));
-        xhr.ontimeout = () => reject(new Error("Upload chunk timed out"));
-        xhr.onabort = () => reject(new Error("Upload cancelled"));
-        xhr.send(blob);
-    });
-}
 
-async function uploadFile(file){
-    const total = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-    const id = cryptoRandomId();
-    const queue = createQueueItem(file);
-    let uploaded = 0;
-    try{
-        for(let index = 0; index < total; index++){
-            const start = index * CHUNK_SIZE;
-            const end = Math.min(file.size, start + CHUNK_SIZE);
-            const blob = file.slice(start, end);
-            const params = new URLSearchParams({id, index:String(index), total:String(total), size:String(file.size), name:file.name, relativePath:file.name});
-            const url = "/api/upload-chunk?" + params.toString();
-            let lastError = null;
-            for(let attempt = 1; attempt <= 3; attempt++){
-                try{
-                    await uploadChunkXHR(url, blob, fraction => {
-                        updateQueue(queue, ((uploaded + blob.size * fraction) / Math.max(file.size,1)) * 100);
-                    });
-                    lastError = null;
-                    break;
-                }catch(error){
-                    lastError = error;
-                    if(attempt < 3) await new Promise(resolve => setTimeout(resolve, 700 * attempt));
-                }
+async function uploadFile(
+    file
+){
+
+    const total =
+        Math.ceil(
+            file.size /
+            CHUNK_SIZE
+        );
+
+
+    const id =
+        cryptoRandomId();
+
+
+    const queue =
+        createQueueItem(
+            file
+        );
+
+
+    let uploaded =
+        0;
+
+
+    for(
+        let index = 0;
+        index < total;
+        index++
+    ){
+
+        const start =
+            index *
+            CHUNK_SIZE;
+
+
+        const end =
+            Math.min(
+                file.size,
+                start +
+                CHUNK_SIZE
+            );
+
+
+        const blob =
+            file.slice(
+                start,
+                end
+            );
+
+
+        const params =
+            new URLSearchParams({
+
+                id,
+
+                index:
+                    String(index),
+
+                total:
+                    String(total),
+
+                size:
+                    String(file.size),
+
+                name:
+                    file.name,
+
+                relativePath:
+                    file.name
+            });
+
+
+        await uploadChunkWithProgress(
+            "/api/upload-chunk?" +
+            params.toString(),
+            blob,
+            (loaded) => {
+
+                const currentUploaded =
+                    uploaded + loaded;
+
+                const percent =
+                    file.size
+                        ? currentUploaded /
+                            file.size *
+                            100
+                        : 100;
+
+                updateQueue(
+                    queue,
+                    percent,
+                    false,
+                    currentUploaded,
+                    file.size
+                );
             }
-            if(lastError) throw lastError;
-            uploaded += blob.size;
-            updateQueue(queue, file.size ? uploaded / file.size * 100 : 100);
-        }
-        updateQueue(queue, 100, true);
-        rememberRecent(file.name);
-        showToast(`${file.name} uploaded`);
-    }catch(error){
-        updateQueue(queue, uploaded / Math.max(file.size,1) * 100);
-        throw error;
+        );
+
+
+        uploaded +=
+            blob.size;
+
+
+        updateQueue(
+            queue,
+            file.size
+                ? uploaded /
+                    file.size *
+                    100
+                : 100,
+            false,
+            uploaded,
+            file.size
+        );
     }
+
+
+    updateQueue(
+        queue,
+        100,
+        true,
+        file.size,
+        file.size
+    );
+
+
+    rememberRecent(
+        file.name
+    );
+
+
+    try{
+        await loadStorage();
+    }catch(error){
+        console.error(
+            "STORAGE REFRESH AFTER UPLOAD ERROR:",
+            error
+        );
+    }
+
+
+    showToast(
+        `${file.name} uploaded`
+    );
 }
+
+
+function uploadChunkWithProgress(
+    url,
+    blob,
+    onProgress
+){
+
+    return new Promise(
+        (resolve, reject) => {
+
+            const xhr =
+                new XMLHttpRequest();
+
+            xhr.open(
+                "POST",
+                url,
+                true
+            );
+
+            xhr.withCredentials =
+                true;
+
+            xhr.setRequestHeader(
+                "Content-Type",
+                "application/octet-stream"
+            );
+
+            xhr.setRequestHeader(
+                "Content-Length",
+                String(blob.size)
+            );
+
+            xhr.upload.onprogress =
+                event => {
+
+                    if(
+                        event.lengthComputable
+                    ){
+
+                        onProgress(
+                            event.loaded
+                        );
+                    }
+                };
+
+            xhr.onerror =
+                () => {
+                    reject(
+                        new Error(
+                            "Network error during upload"
+                        )
+                    );
+                };
+
+            xhr.onabort =
+                () => {
+                    reject(
+                        new Error(
+                            "Upload cancelled"
+                        )
+                    );
+                };
+
+            xhr.onload =
+                async () => {
+
+                    let data = null;
+
+                    try{
+                        data =
+                            JSON.parse(
+                                xhr.responseText ||
+                                "null"
+                            );
+                    }catch(_){ }
+
+                    if(
+                        xhr.status === 401
+                    ){
+
+                        showLogin();
+
+                        reject(
+                            new Error(
+                                "Session expired"
+                            )
+                        );
+
+                        return;
+                    }
+
+                    if(
+                        xhr.status < 200 ||
+                        xhr.status >= 300
+                    ){
+
+                        reject(
+                            new Error(
+                                data?.error ||
+                                "Upload failed"
+                            )
+                        );
+
+                        return;
+                    }
+
+                    onProgress(
+                        blob.size
+                    );
+
+                    resolve(data);
+                };
+
+            xhr.send(blob);
+        }
+    );
+}
+
+
 
 /* =========================================================
    QUEUE
@@ -6288,6 +7236,18 @@ function createQueueItem(
     );
 
 
+    const remaining =
+        document.createElement(
+            "div"
+        );
+
+    remaining.className =
+        "queueRemaining";
+
+    remaining.textContent =
+        `${formatClientBytes(0)} uploaded • ${formatClientBytes(file.size)} left`;
+
+
     const track =
         document.createElement(
             "div"
@@ -6310,6 +7270,7 @@ function createQueueItem(
 
     item.append(
         top,
+        remaining,
         track
     );
 
@@ -6322,6 +7283,7 @@ function createQueueItem(
     return {
         item,
         percent,
+        remaining,
         bar
     };
 }
@@ -6330,14 +7292,19 @@ function createQueueItem(
 function updateQueue(
     queue,
     value,
-    done = false
+    done = false,
+    uploadedBytes = 0,
+    totalBytes = 0
 ){
 
     const rounded =
         Math.min(
             100,
-            Math.round(
-                value
+            Math.max(
+                0,
+                Math.round(
+                    value
+                )
             )
         );
 
@@ -6352,6 +7319,22 @@ function updateQueue(
         `${rounded}%`;
 
 
+    if(queue.remaining){
+
+        const remainingBytes =
+            Math.max(
+                0,
+                Number(totalBytes || 0) -
+                Number(uploadedBytes || 0)
+            );
+
+        queue.remaining.textContent =
+            done
+                ? "Complete"
+                : `${formatClientBytes(uploadedBytes)} uploaded • ${formatClientBytes(remainingBytes)} left`;
+    }
+
+
     if(done){
 
         setTimeout(
@@ -6364,6 +7347,7 @@ function updateQueue(
         );
     }
 }
+
 
 
 /* =========================================================
@@ -6903,5 +7887,7 @@ window.addEventListener(
 
 </body>
     </html>
+
+
 
     
