@@ -1,8 +1,8 @@
 {
   "name": "cloud-zen",
-  "version": "3.3.0",
+  "version": "3.1.0",
   "private": true,
-  "description": "Cloud-Zen Vercel + Telegram private cloud with fast indexed listing, 4MB uploads, file menus, rename/share/delete password and PDF preview.",
+  "description": "Cloud-Zen Ultimate mobile-first private cloud workspace",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
