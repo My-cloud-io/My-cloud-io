@@ -1,8 +1,8 @@
 {
   "name": "cloud-zen",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "private": true,
-  "description": "Cloud-Zen mobile-first private cloud with Vercel-safe Telegram MTProto chunk uploads",
+  "description": "Cloud-Zen Vercel + Telegram private cloud with fast indexed listing, 4MB uploads, file menus, rename/share/delete password and PDF preview.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -18,4 +18,3 @@
     "teleproto": "^1.229.0"
   }
 }
-
