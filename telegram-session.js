@@ -1,17 +1,13 @@
 "use strict";
 
 /*
-  My-cloud-io Vercel build intentionally does not use a shared MTProto
-  TELEGRAM_SESSION for file storage.
+  My-cloud-io keeps this file for compatibility with the original project
+  layout. The production Vercel build does NOT use an MTProto session for
+  storage, so concurrent Vercel instances cannot invalidate one Telegram
+  auth key with AUTH_KEY_DUPLICATED.
 
-  A single MTProto user session reused by concurrent Vercel serverless
-  instances can be invalidated by Telegram with AUTH_KEY_DUPLICATED.
-  This file is retained because the project structure requested by the
-  owner includes telegram-session.js. It is a compatibility placeholder.
-
-  Real durable file storage is Vercel Blob (private store), which is designed
-  for concurrent Vercel Functions and supports multipart/large files.
+  Durable file storage is handled by Vercel Blob in server.js.
 */
 
-console.log("My-cloud-io: telegram-session.js is retained for compatibility; Vercel Blob is the active storage backend.");
+console.log("[My-cloud-io] telegram-session.js is compatibility-only; Vercel Blob is the active storage backend.");
 
