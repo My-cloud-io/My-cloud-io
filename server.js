@@ -20,6 +20,8 @@ const path = require("path");
 const crypto = require("crypto");
 const archiver = require("archiver");
 const { put, get, list, del, head } = require("@vercel/blob");
+const { handleUpload } = require("@vercel/blob/client");
+const { Readable } = require("stream");
 
 const app = express();
 app.disable("x-powered-by");
@@ -35,7 +37,7 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 3;
 const META_PREFIX = "my-cloud-io/meta/";
-const CHUNK_PREFIX = "my-cloud-io/chunks/";
+const FILE_PREFIX = "my-cloud-io/files/";
 const ID_RE = /^[a-f0-9-]{16,80}$/i;
 
 const failures = new Map();
@@ -125,7 +127,6 @@ function cleanRelative(v) {
 }
 function newId() { return crypto.randomUUID(); }
 function metaPath(id) { return `${META_PREFIX}${id}.json`; }
-function chunkPath(id, index) { return `${CHUNK_PREFIX}${id}/${String(index).padStart(8, "0")}.part`; }
 function parseId(v) {
   const id = String(v || "");
   if (!ID_RE.test(id)) throw new Error("Invalid upload id");
@@ -230,51 +231,106 @@ app.get("/api/files", requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message || "Could not list files" }); }
 });
 
-app.post("/api/upload-chunk", requireAuth, async (req, res) => {
+/*
+  Direct browser -> Vercel Blob upload.
+  This is intentionally used instead of POSTing file bytes through the
+  Express function: Vercel documents a 4.5 MB Function request-body limit
+  and recommends Blob client uploads for larger files.
+*/
+app.post("/api/blob-upload", requireAuth, async (req, res) => {
   try {
-    const q = req.query;
-    const id = parseId(q.id);
-    const index = Number(q.index);
-    const total = Number(q.total);
-    const size = Number(q.size);
-    if (!Number.isInteger(index) || index < 0 || !Number.isInteger(total) || total < 1 || total > Math.ceil(MAX_FILE_SIZE / CHUNK_SIZE) || index >= total) throw new Error("Invalid chunk parameters");
-    if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_SIZE) throw new Error("File size exceeds the configured limit");
-    const body = Buffer.from(await req.arrayBuffer());
-    if (!body.length && !(size === 0 && total === 1)) throw new Error("Empty chunk");
-    if (body.length > CHUNK_SIZE) throw new Error("Chunk too large");
-    const name = cleanName(q.name);
-    const relativePath = cleanRelative(q.relativePath || name);
-    const pathname = chunkPath(id, index);
-    await put(pathname, body, { access: "private", allowOverwrite: false, contentType: "application/octet-stream", cacheControlMaxAge: 60 });
-
-    if (index === total - 1) {
-      let bytes = 0;
-      for (let i = 0; i < total; i++) {
-        const b = await head(chunkPath(id, i));
-        bytes += Number(b.size || 0);
+    const body = req.body || {};
+    const jsonResponse = await handleUpload({
+      body,
+      request: req,
+      onBeforeGenerateToken: async (pathname, clientPayload, multipart) => {
+        let payload = {};
+        try { payload = JSON.parse(String(clientPayload || "{}")); } catch (_) {}
+        const id = parseId(payload.id || newId());
+        const name = cleanName(payload.name || path.basename(pathname));
+        const relativePath = cleanRelative(payload.relativePath || name);
+        const size = Number(payload.size || 0);
+        const expectedPrefix = `${FILE_PREFIX}${id}/`;
+        if (!String(pathname).startsWith(expectedPrefix)) throw new Error("Invalid upload pathname");
+        if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_SIZE) throw new Error("File size exceeds the configured limit");
+        return {
+          addRandomSuffix: false,
+          tokenPayload: JSON.stringify({ id, name, relativePath, size, type: String(payload.type || mimeFor(name)), multipart: Boolean(multipart) })
+        };
+      },
+      onUploadCompleted: async ({ blob, tokenPayload }) => {
+        let p = {};
+        try { p = JSON.parse(String(tokenPayload || "{}")); } catch (_) {}
+        let existing = null;
+        try { existing = await readMeta(metaPath(parseId(p.id))); } catch (_) {}
+        if (existing) return;
+        const meta = {
+          id: parseId(p.id),
+          name: cleanName(p.name),
+          relativePath: cleanRelative(p.relativePath || p.name),
+          size: Number(p.size || 0),
+          type: String(p.type || mimeFor(p.name)),
+          pathname: blob.pathname,
+          url: blob.url,
+          downloadUrl: blob.downloadUrl,
+          etag: blob.etag,
+          complete: true,
+          uploadedAt: new Date().toISOString(),
+          modifiedAt: new Date().toISOString()
+        };
+        await writeMeta(meta);
       }
-      if (bytes !== size) throw new Error(`Upload size mismatch: expected ${size}, received ${bytes}`);
-      await writeMeta({ id, name, relativePath, size, type: String(q.type || mimeFor(name)), totalChunks: total, complete: true, uploadedAt: new Date().toISOString(), modifiedAt: new Date().toISOString() });
-    }
-    res.json({ ok: true, id, index, total, complete: index === total - 1, received: body.length });
+    });
+    res.status(200).json(jsonResponse);
   } catch (e) {
-    console.error("UPLOAD CHUNK:", e);
-    res.status(500).json({ error: e.message || "Upload failed" });
+    console.error("BLOB UPLOAD HANDSHAKE:", e);
+    const msg = String(e?.message || e || "Upload service unavailable");
+    const credentialError = /blob credentials|BLOB_READ_WRITE_TOKEN|BLOB_STORE_ID|OIDC|token/i.test(msg);
+    res.status(400).json({
+      error: credentialError
+        ? "Vercel Blob is not connected. In Vercel open Storage → Blob, create/connect a PRIVATE Blob store to this project, then redeploy."
+        : msg
+    });
+  }
+});
+
+app.post("/api/register-upload", requireAuth, async (req, res) => {
+  try {
+    const id = parseId(req.body?.id);
+    const pathname = String(req.body?.pathname || "");
+    const name = cleanName(req.body?.name || "file");
+    const relativePath = cleanRelative(req.body?.relativePath || name);
+    const size = Number(req.body?.size || 0);
+    const type = String(req.body?.type || mimeFor(name));
+    if (!pathname.startsWith(`${FILE_PREFIX}${id}/`)) throw new Error("Invalid storage path");
+    if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_SIZE) throw new Error("Invalid file size");
+    const blob = await head(pathname);
+    if (Number(blob.size || 0) !== size) throw new Error(`Upload size mismatch: expected ${size}, received ${Number(blob.size || 0)}`);
+    const meta = {
+      id, name, relativePath, size, type, pathname,
+      url: String(req.body?.url || ""),
+      downloadUrl: String(req.body?.downloadUrl || ""),
+      etag: String(req.body?.etag || blob.etag || ""),
+      complete: true,
+      uploadedAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString()
+    };
+    await writeMeta(meta);
+    res.json({ ok: true, file: { id, name, relativePath, size, sizeText: formatBytes(size), type, mimeType: type, uploadedAt: meta.uploadedAt, modifiedAt: meta.modifiedAt } });
+  } catch (e) {
+    console.error("REGISTER UPLOAD:", e);
+    res.status(400).json({ error: e.message || "Could not register uploaded file" });
   }
 });
 
 app.delete("/api/upload/:id", requireAuth, async (req, res) => {
   try {
     const id = parseId(req.params.id);
-    const blobs = [];
-    let cursor;
-    do {
-      const page = await list({ prefix: `${CHUNK_PREFIX}${id}/`, limit: 1000, cursor });
-      blobs.push(...(page.blobs || []).map(b => b.pathname));
-      cursor = page.hasMore ? page.cursor : undefined;
-    } while (cursor);
-    if (blobs.length) await del(blobs);
-    await del(metaPath(id));
+    const meta = await readMeta(metaPath(id));
+    if (meta?.pathname) {
+      try { await del(meta.pathname); } catch (_) {}
+    }
+    try { await del(metaPath(id)); } catch (_) {}
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message || "Could not cancel upload" }); }
 });
@@ -290,37 +346,28 @@ async function streamFile(meta, req, res, attachment) {
     else { start = Number(a); if (b) end = Math.min(size - 1, Number(b)); }
     if (start <= end && start < size) partial = true; else return res.status(416).set("Content-Range", `bytes */${size}`).end();
   }
+  const r = await get(meta.pathname, { access: "private", useCache: false });
+  if (!r) throw new Error("File not found in Vercel Blob");
   res.status(partial ? 206 : 200);
   res.setHeader("Content-Type", mime);
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("Cache-Control", "private, no-store");
-  res.setHeader("Content-Length", String(end - start + 1));
+  res.setHeader("Content-Length", String(Math.max(0, end - start + 1)));
   if (partial) res.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
   if (attachment) res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
-
   let pos = 0;
-  for (let i = 0; i < meta.totalChunks; i++) {
+  for await (const piece of r.stream) {
     if (res.destroyed) return;
-    const chunkSize = Math.min(CHUNK_SIZE, size - i * CHUNK_SIZE);
-    const chunkStart = pos;
-    const chunkEnd = pos + chunkSize - 1;
-    if (chunkEnd < start) { pos += chunkSize; continue; }
-    if (chunkStart > end) break;
-    const r = await get(chunkPath(meta.id, i), { access: "private", useCache: false });
-    if (!r) throw new Error("Missing storage chunk");
-    let skip = Math.max(0, start - chunkStart);
-    let take = Math.min(chunkSize - skip, end - Math.max(start, chunkStart) + 1);
-    let emitted = 0;
-    for await (const piece of r.stream) {
-      const buf = Buffer.from(piece);
-      if (skip >= buf.length) { skip -= buf.length; continue; }
-      const sliced = buf.subarray(skip, Math.min(buf.length, skip + take));
-      skip = 0;
-      if (sliced.length) { res.write(sliced); emitted += sliced.length; take -= sliced.length; }
-      if (take <= 0) break;
+    const buf = Buffer.from(piece);
+    const pieceStart = pos;
+    const pieceEnd = pos + buf.length - 1;
+    if (pieceEnd >= start && pieceStart <= end) {
+      const from = Math.max(0, start - pieceStart);
+      const to = Math.min(buf.length, end - pieceStart + 1);
+      if (to > from) res.write(buf.subarray(from, to));
     }
-    pos += chunkSize;
-    if (pos - 1 >= end) break;
+    pos += buf.length;
+    if (pos > end) break;
   }
   res.end();
 }
@@ -369,14 +416,8 @@ app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) =>
     const name = String(req.body?.name || "");
     const meta = await findMetaByName(name);
     if (!meta) return res.status(404).json({ error: "File not found" });
-    const paths = [metaPath(meta.id)];
-    let cursor;
-    do {
-      const page = await list({ prefix: `${CHUNK_PREFIX}${meta.id}/`, limit: 1000, cursor });
-      paths.push(...(page.blobs || []).map(b => b.pathname));
-      cursor = page.hasMore ? page.cursor : undefined;
-    } while (cursor);
-    await del(paths);
+    if (meta.pathname) await del(meta.pathname);
+    await del(metaPath(meta.id));
     res.json({ ok: true, deleted: name });
   } catch (e) { res.status(500).json({ error: e.message || "Delete failed" }); }
 });
@@ -409,13 +450,9 @@ app.get("/api/download-all", requireAuth, async (req, res) => {
   try {
     const files = await allMeta();
     for (const meta of files) {
-      const chunks = [];
-      for (let i = 0; i < meta.totalChunks; i++) {
-        const r = await get(chunkPath(meta.id, i), { access: "private", useCache: false });
-        if (!r) throw new Error(`Missing chunk for ${meta.name}`);
-        for await (const piece of r.stream) chunks.push(Buffer.from(piece));
-      }
-      archive.append(Buffer.concat(chunks), { name: meta.relativePath || meta.name });
+      const r = await get(meta.pathname, { access: "private", useCache: false });
+      if (!r) throw new Error(`Missing file for ${meta.name}`);
+      archive.append(Readable.fromWeb(r.stream), { name: meta.relativePath || meta.name });
     }
     await archive.finalize();
   } catch (e) { console.error("ZIP:", e); try { archive.abort(); } catch (_) {} if (!res.destroyed) res.destroy(e); }
@@ -430,4 +467,4 @@ if (!process.env.VERCEL) {
 }
 
 module.exports = app;
-  
+                             
