@@ -1,20 +1,20 @@
 {
-  "name": "cloud-zen",
-  "version": "3.3.1",
+  "name": "my-cloud-io",
+  "version": "5.0.0",
   "private": true,
-  "description": "Cloud-Zen private cloud workspace \u2014 Vercel + Telegram MTProto",
+  "description": "My-cloud-io private Vercel cloud storage",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "telegram:session": "node telegram-session.js",
     "healthcheck": "node --check server.js"
   },
   "engines": {
     "node": "24.x"
   },
   "dependencies": {
+    "@vercel/blob": "^2.4.0",
     "archiver": "^7.0.1",
-    "express": "^5.1.0",
-    "teleproto": "^1.229.0"
+    "express": "^5.1.0"
   }
 }
+
