@@ -6917,267 +6917,168 @@ async function uploadFile(
     file
 ){
 
-    const total =
-        Math.ceil(
-            file.size /
-            CHUNK_SIZE
-        );
-
-
     const id =
         cryptoRandomId();
-
 
     const queue =
         createQueueItem(
             file
         );
 
+    const relativePath =
+        file.webkitRelativePath ||
+        file.name;
 
-    let uploaded =
-        0;
+    try{
 
-
-    for(
-        let index = 0;
-        index < total;
-        index++
-    ){
-
-        const start =
-            index *
-            CHUNK_SIZE;
-
-
-        const end =
-            Math.min(
-                file.size,
-                start +
-                CHUNK_SIZE
+        const module =
+            await import(
+                "https://esm.sh/@vercel/blob@2.4.0/client"
             );
 
+        const upload =
+            module.upload;
 
-        const blob =
-            file.slice(
-                start,
-                end
+        if(
+            typeof upload !== "function"
+        ){
+            throw new Error(
+                "Vercel Blob upload client could not be loaded"
+            );
+        }
+
+        const pathname =
+            `my-cloud-io/files/${id}/${encodeURIComponent(file.name)}`;
+
+        const result =
+            await upload(
+                pathname,
+                file,
+                {
+                    access:
+                        "private",
+
+                    handleUploadUrl:
+                        "/api/blob-upload",
+
+                    clientPayload:
+                        JSON.stringify({
+                            id,
+                            name:
+                                file.name,
+                            relativePath,
+                            size:
+                                file.size,
+                            type:
+                                file.type ||
+                                "application/octet-stream"
+                        }),
+
+                    multipart:
+                        true,
+
+                    onUploadProgress:
+                        event => {
+
+                            updateQueue(
+                                queue,
+                                Number(
+                                    event?.percentage ||
+                                    0
+                                ),
+                                false,
+                                Number(
+                                    event?.loaded ||
+                                    0
+                                ),
+                                file.size
+                            );
+                        }
+                }
             );
 
+        const registered =
+            await api(
+                "/api/register-upload",
+                {
+                    method:
+                        "POST",
 
-        const params =
-            new URLSearchParams({
+                    headers:{
+                        "Content-Type":
+                            "application/json"
+                    },
 
-                id,
+                    body:
+                        JSON.stringify({
+                            id,
+                            pathname:
+                                result.pathname,
+                            name:
+                                file.name,
+                            relativePath,
+                            size:
+                                file.size,
+                            type:
+                                file.type ||
+                                "application/octet-stream",
+                            url:
+                                result.url,
+                            downloadUrl:
+                                result.downloadUrl,
+                            etag:
+                                result.etag
+                        })
+                }
+            );
 
-                index:
-                    String(index),
-
-                total:
-                    String(total),
-
-                size:
-                    String(file.size),
-
-                name:
-                    file.name,
-
-                relativePath:
-                    (file.webkitRelativePath || file.name)
-            });
-
-
-        await uploadChunkWithProgress(
-            "/api/upload-chunk?" +
-            params.toString(),
-            blob,
-            (loaded) => {
-
-                const currentUploaded =
-                    uploaded + loaded;
-
-                const percent =
-                    file.size
-                        ? currentUploaded /
-                            file.size *
-                            100
-                        : 100;
-
-                updateQueue(
-                    queue,
-                    percent,
-                    false,
-                    currentUploaded,
-                    file.size
-                );
-            }
-        );
-
-
-        uploaded +=
-            blob.size;
-
+        if(
+            !registered ||
+            !registered.ok
+        ){
+            throw new Error(
+                "Upload completed but file registration failed"
+            );
+        }
 
         updateQueue(
             queue,
-            file.size
-                ? uploaded /
-                    file.size *
-                    100
-                : 100,
-            false,
-            uploaded,
+            100,
+            true,
+            file.size,
             file.size
         );
-    }
 
-
-    updateQueue(
-        queue,
-        100,
-        true,
-        file.size,
-        file.size
-    );
-
-
-    rememberRecent(
-        file.name
-    );
-
-
-    try{
-        await loadStorage();
-    }catch(error){
-        console.error(
-            "STORAGE REFRESH AFTER UPLOAD ERROR:",
-            error
+        rememberRecent(
+            file.name
         );
-    }
 
-
-    showToast(
-        `${file.name} uploaded`
-    );
-}
-
-
-function uploadChunkWithProgress(
-    url,
-    blob,
-    onProgress
-){
-
-    return new Promise(
-        (resolve, reject) => {
-
-            const xhr =
-                new XMLHttpRequest();
-
-            xhr.open(
-                "POST",
-                url,
-                true
+        try{
+            await loadEverything();
+        }catch(error){
+            console.error(
+                "REFRESH AFTER UPLOAD ERROR:",
+                error
             );
-
-            xhr.withCredentials =
-                true;
-
-            xhr.setRequestHeader(
-                "Content-Type",
-                "application/octet-stream"
-            );
-
-            xhr.setRequestHeader(
-                "Content-Length",
-                String(blob.size)
-            );
-
-            xhr.upload.onprogress =
-                event => {
-
-                    if(
-                        event.lengthComputable
-                    ){
-
-                        onProgress(
-                            event.loaded
-                        );
-                    }
-                };
-
-            xhr.onerror =
-                () => {
-                    reject(
-                        new Error(
-                            "Network error during upload"
-                        )
-                    );
-                };
-
-            xhr.onabort =
-                () => {
-                    reject(
-                        new Error(
-                            "Upload cancelled"
-                        )
-                    );
-                };
-
-            xhr.onload =
-                async () => {
-
-                    let data = null;
-
-                    try{
-                        data =
-                            JSON.parse(
-                                xhr.responseText ||
-                                "null"
-                            );
-                    }catch(_){ }
-
-                    if(
-                        xhr.status === 401
-                    ){
-
-                        showLogin();
-
-                        reject(
-                            new Error(
-                                "Session expired"
-                            )
-                        );
-
-                        return;
-                    }
-
-                    if(
-                        xhr.status < 200 ||
-                        xhr.status >= 300
-                    ){
-
-                        reject(
-                            new Error(
-                                data?.error ||
-                                "Upload failed"
-                            )
-                        );
-
-                        return;
-                    }
-
-                    onProgress(
-                        blob.size
-                    );
-
-                    resolve(data);
-                };
-
-            xhr.send(blob);
         }
-    );
-}
 
+        showToast(
+            `${file.name} uploaded`
+        );
+
+    }catch(error){
+
+        updateQueue(
+            queue,
+            0,
+            false,
+            0,
+            file.size
+        );
+
+        throw error;
+    }
+}
 
 
 /* =========================================================
@@ -7888,6 +7789,9 @@ window.addEventListener(
 </body>
     </html>
 
+
+
+    
 
 
     
