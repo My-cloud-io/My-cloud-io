@@ -273,8 +273,8 @@ button{
         );
 
     transition:
-        opacity .12s ease,
-        visibility .12s ease;
+        opacity .9s ease,
+        visibility .9s ease;
 }
 
 #introScreen.hide{
@@ -3112,22 +3112,6 @@ input[type="password"]::placeholder{
 .fileCard.quickActionsOpen .deleteRow{display:flex !important;}
 @media(max-width:760px){.storageProviderGrid{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(220px,82%);overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;padding-bottom:4px;-webkit-overflow-scrolling:touch;}.storageProvider{scroll-snap-align:start;}}
 @media(max-width:470px){.storageAccordionButton{padding:8px 9px;}}
-
-/* =========================================================
-   CLOUD PROVIDER UI HIDDEN
-   Provider cards/options are intentionally not displayed.
-========================================================= */
-
-#storageDetailsCard{
-    display:none !important;
-}
-
-.storageProviderGrid,
-.storageProvider,
-.storageAccordionButton{
-    display:none !important;
-}
-
 </style>
 
 
@@ -3389,8 +3373,6 @@ input[type="password"]::placeholder{
         <section
             id="storageDetailsCard"
             class="storageDetailsCard"
-            aria-hidden="true"
-            style="display:none !important;"
         >
 
             <div class="storageDetailsHead">
@@ -5108,7 +5090,29 @@ function formatClientBytes(bytes){
 
 
 
-/* Connected cloud/provider accordion removed — Vercel Blob is the active storage. */
+/* =========================================================
+   STORAGE ACCORDION — COLLAPSE LONG PROVIDER LIST
+========================================================= */
+(function initStorageAccordion(){
+    const detailsCard = document.getElementById("storageDetailsCard");
+    const head = detailsCard?.querySelector(".storageDetailsHead");
+    if(!detailsCard || !head) return;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "storageAccordionButton";
+    button.innerHTML = `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`;
+
+    button.addEventListener("click", () => {
+        const collapsed = detailsCard.classList.toggle("storageCompact");
+        button.innerHTML = collapsed
+            ? `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`
+            : `Hide <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌃</span>`;
+    });
+
+    head.appendChild(button);
+    detailsCard.classList.add("storageCompact");
+})();
 
 storageDetailsRefresh?.addEventListener(
     "click",
@@ -5955,27 +5959,6 @@ function createFileCard(
     );
 
 
-    const rename =
-        document.createElement(
-            "button"
-        );
-
-    rename.className =
-        "fileAction";
-
-    rename.textContent =
-        "Rename";
-
-    rename.addEventListener(
-        "click",
-        () => {
-            renameFile(
-                file.name
-            );
-        }
-    );
-
-
     const share =
         document.createElement(
             "button"
@@ -6060,7 +6043,6 @@ function createFileCard(
         open,
         download,
         share,
-        rename,
         more
     );
 
@@ -6197,101 +6179,6 @@ function rememberRecent(
         RECENT_KEY,
         recent
     );
-}
-
-
-/* =========================================================
-   RENAME — REAL VERCEL BLOB RENAME
-========================================================= */
-
-async function renameFile(
-    name
-){
-
-    const currentName =
-        String(name || "").trim();
-
-    if(!currentName){
-        return;
-    }
-
-    const suggested =
-        currentName;
-
-    const newName =
-        window.prompt(
-            `Rename "${currentName}" to:`,
-            suggested
-        );
-
-    if(newName === null){
-        return;
-    }
-
-    const cleaned =
-        newName.trim();
-
-    if(!cleaned || cleaned === currentName){
-        return;
-    }
-
-    try{
-
-        await api(
-            "/api/files",
-            {
-
-                method:"PATCH",
-
-                headers:{
-                    "Content-Type":
-                        "application/json"
-                },
-
-                body:
-                    JSON.stringify({
-                        name:currentName,
-                        newName:cleaned
-                    })
-            }
-        );
-
-        // Keep local UI state consistent with the real storage rename.
-        if(starred.has(currentName)){
-            starred.delete(currentName);
-            starred.add(cleaned);
-            writeJSON(
-                STAR_KEY,
-                [...starred]
-            );
-        }
-
-        recent =
-            recent.map(
-                item =>
-                    item === currentName
-                        ? cleaned
-                        : item
-            );
-
-        writeJSON(
-            RECENT_KEY,
-            recent
-        );
-
-        showToast(
-            "File renamed"
-        );
-
-        await loadEverything();
-
-    }catch(error){
-
-        alert(
-            error.message ||
-            "Rename failed"
-        );
-    }
 }
 
 
@@ -6813,22 +6700,6 @@ async function deleteFile(
 
     try{
 
-        const deletePassword =
-            window.prompt(
-                "Enter your delete password to permanently delete this file:"
-            );
-
-        if(deletePassword === null){
-            return;
-        }
-
-        if(!deletePassword){
-            alert(
-                "Delete password is required."
-            );
-            return;
-        }
-
         await api(
             "/api/files",
             {
@@ -6842,8 +6713,7 @@ async function deleteFile(
 
                 body:
                     JSON.stringify({
-                        name,
-                        deletePassword
+                        name
                     })
             }
         );
@@ -8106,5 +7976,68 @@ document.addEventListener(
 
         if(
             event.key ===
-         
-Preview truncated for large file
+            "Escape"
+        ){
+
+            closeViewer();
+
+            closeQRCode();
+        }
+
+
+        if(
+            event.key === "/" &&
+
+            document.activeElement !==
+                searchInput &&
+
+            document.activeElement !==
+                password
+        ){
+
+            event.preventDefault();
+
+            searchInput.focus();
+        }
+    }
+);
+
+
+/* =========================================================
+   WELCOME / START
+========================================================= */
+
+window.addEventListener(
+    "load",
+    () => {
+
+        setTimeout(
+            welcomeVoice,
+            450
+        );
+
+
+        setTimeout(
+            () => {
+
+                intro.classList.add(
+                    "hide"
+                );
+
+
+                checkAuthentication();
+
+            },
+            2500
+        );
+    }
+);
+
+</script>
+
+</body>
+    </html>
+
+
+
+    
