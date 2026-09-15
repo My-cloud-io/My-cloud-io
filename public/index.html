@@ -7942,6 +7942,15 @@ window.addEventListener(
 
 </script>
 
+<script>
+/* Requested welcome-screen duration: about 2.5 seconds. */
+window.setTimeout(function(){
+    var intro=document.getElementById("introScreen");
+    if(intro){
+        intro.classList.add("hide");
+    }
+},2500);
+</script>
 </body>
     </html>
 
@@ -7949,3 +7958,4 @@ window.addEventListener(
 
     
 z
+    
