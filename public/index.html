@@ -7529,7 +7529,7 @@ async function uploadFiles(
         return;
     }
 
-    const concurrency = Math.min(4, list.length);
+    const concurrency = Math.min(6, list.length);
     let nextIndex = 0;
 
     async function worker(){
