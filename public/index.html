@@ -273,8 +273,8 @@ button{
         );
 
     transition:
-        opacity .12s ease,
-        visibility .12s ease;
+        opacity .9s ease,
+        visibility .9s ease;
 }
 
 #introScreen.hide{
@@ -3112,22 +3112,6 @@ input[type="password"]::placeholder{
 .fileCard.quickActionsOpen .deleteRow{display:flex !important;}
 @media(max-width:760px){.storageProviderGrid{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(220px,82%);overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;padding-bottom:4px;-webkit-overflow-scrolling:touch;}.storageProvider{scroll-snap-align:start;}}
 @media(max-width:470px){.storageAccordionButton{padding:8px 9px;}}
-
-/* =========================================================
-   CLOUD PROVIDER UI HIDDEN
-   Provider cards/options are intentionally not displayed.
-========================================================= */
-
-#storageDetailsCard{
-    display:none !important;
-}
-
-.storageProviderGrid,
-.storageProvider,
-.storageAccordionButton{
-    display:none !important;
-}
-
 </style>
 
 
@@ -8106,5 +8090,27 @@ document.addEventListener(
 
         if(
             event.key ===
-         
+            "Escape"
+        ){
+
+            closeViewer();
+
+            closeQRCode();
+        }
+
+
+        if(
+            event.key === "/" &&
+
+            document.activeElement !==
+                searchInput &&
+
+            document.activeElement !==
+                password
+        ){
+
+            event.preventDefault();
+
+            searchInput.focus();
+        }
 Preview truncated for large file
