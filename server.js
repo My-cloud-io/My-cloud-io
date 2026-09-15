@@ -18,7 +18,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { Readable } = require("stream");
 const archiver = require("archiver");
-const { put, get, list, del, head, copy } = require("@vercel/blob");
+const { put, get, list, del, head, copy, issueSignedToken, presignUrl } = require("@vercel/blob");
 const { handleUpload } = require("@vercel/blob/client");
 
 const app = express();
@@ -257,29 +257,37 @@ function publicFile(meta) {
 
 async function listAllFiles() {
   const files = [];
-  let cursor;
-  do {
-    const result = await list({ prefix: FILE_PREFIX, limit: 1000, cursor });
-    for (const blob of result.blobs || []) {
-      const parsed = parseFilePath(blob.pathname);
-      if (!parsed) continue;
-      files.push({
-        name: parsed.name,
-        size: Number(blob.size || 0),
-        sizeText: formatBytes(blob.size),
-        modified: blob.uploadedAt || null,
-        uploadedAt: blob.uploadedAt || null,
-        type: blob.contentType || mimeFor(parsed.name),
-        mime: blob.contentType || mimeFor(parsed.name),
-        pathname: blob.pathname,
-        relativePath: parsed.relativePath,
-        etag: blob.etag,
-        url: blob.url,
-        downloadUrl: blob.downloadUrl
-      });
-    }
-    cursor = result.cursor;
-  } while (cursor);
+  const seen = new Set();
+  const prefixes = [FILE_PREFIX, LEGACY_FILE_PREFIX];
+
+  for (const prefix of prefixes) {
+    let cursor;
+    do {
+      const result = await list({ prefix, limit: 1000, cursor });
+      for (const blob of result.blobs || []) {
+        if (seen.has(blob.pathname)) continue;
+        const parsed = parseFilePath(blob.pathname);
+        if (!parsed) continue;
+        seen.add(blob.pathname);
+        files.push({
+          name: parsed.name,
+          size: Number(blob.size || 0),
+          sizeText: formatBytes(blob.size),
+          modified: blob.uploadedAt || null,
+          uploadedAt: blob.uploadedAt || null,
+          type: blob.contentType || mimeFor(parsed.name),
+          mime: blob.contentType || mimeFor(parsed.name),
+          pathname: blob.pathname,
+          relativePath: parsed.relativePath,
+          etag: blob.etag,
+          url: blob.url,
+          downloadUrl: blob.downloadUrl
+        });
+      }
+      cursor = result.cursor;
+    } while (cursor);
+  }
+
   files.sort((a, b) => String(a.name).localeCompare(String(b.name)));
   return files;
 }
@@ -292,8 +300,8 @@ async function findFile(name) {
 
 async function findByPathname(pathname) {
   const safe = String(pathname || "");
-  if (!safe.startsWith(FILE_PREFIX)) return null;
-  try { return await head(safe); } catch { return null; }
+  if (!safe.startsWith(FILE_PREFIX) && !safe.startsWith(LEGACY_FILE_PREFIX)) return null;
+  try { return await head(safe, { access: "private" }); } catch { return null; }
 }
 
 /* =========================
@@ -390,6 +398,49 @@ app.get("/api/files", requireAuth, async (req, res) => {
 /* =========================
    DIRECT VERCEL BLOB CLIENT UPLOAD
 ========================= */
+app.post("/api/blob-upload-url", requireAuth, async (req, res) => {
+  try {
+    const pathname = String(req.body?.pathname || "");
+    const size = Number(req.body?.size);
+    const contentType = String(req.body?.contentType || "application/octet-stream").slice(0, 180);
+
+    if (!pathname.startsWith(FILE_PREFIX)) return jsonError(res, 400, "Invalid upload path");
+    if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_FILE_SIZE) {
+      return jsonError(res, 400, `File size must be between 1 byte and ${formatBytes(MAX_FILE_SIZE)}`);
+    }
+
+    // A short-lived URL is scoped to this exact pathname and PUT operation.
+    // The file bytes go directly from the browser to Vercel Blob, never through
+    // the Vercel Function, so the Function 4.5 MB request limit is avoided.
+    const token = await issueSignedToken({
+      pathname,
+      operations: ["put"],
+      validUntil: Date.now() + 15 * 60 * 1000
+    });
+
+    const signed = await presignUrl(token, {
+      pathname,
+      operation: "put",
+      validUntil: Date.now() + 15 * 60 * 1000
+    });
+
+    res.json({
+      ok: true,
+      pathname,
+      uploadUrl: signed.presignedUrl,
+      expiresAt: Date.now() + 15 * 60 * 1000,
+      contentType
+    });
+  } catch (error) {
+    console.error("BLOB SIGNED UPLOAD ERROR:", error?.stack || error);
+    const message = String(error?.message || error);
+    if (/No blob credentials|credentials found|BLOB_READ_WRITE_TOKEN|oidc|store/i.test(message)) {
+      return jsonError(res, 503, "Vercel Blob is not connected. Connect a PRIVATE Blob store to this Vercel project and redeploy.");
+    }
+    return jsonError(res, 400, message);
+  }
+});
+
 app.post("/api/blob-upload", requireAuth, async (req, res) => {
   try {
     const body = req.body;
@@ -470,7 +521,7 @@ app.delete("/api/upload/:id", requireAuth, async (req, res) => {
 ========================= */
 async function streamBlob(req, res, pathname, inline) {
   const safe = String(pathname || "");
-  if (!safe.startsWith(FILE_PREFIX)) return res.status(404).send("File not found");
+  if (!safe.startsWith(FILE_PREFIX) && !safe.startsWith(LEGACY_FILE_PREFIX)) return res.status(404).send("File not found");
   const range = String(req.headers.range || "").trim();
   const options = { access: "private" };
   if (range) options.range = range;
@@ -699,4 +750,4 @@ if (!process.env.VERCEL) {
 }
 
 module.exports = app;
-  
+
