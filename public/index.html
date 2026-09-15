@@ -6982,7 +6982,7 @@ async function uploadFile(
                     file.name,
 
                 relativePath:
-                    file.name
+                    (file.webkitRelativePath || file.name)
             });
 
 
@@ -7887,6 +7887,7 @@ window.addEventListener(
 
 </body>
     </html>
+
 
 
     
