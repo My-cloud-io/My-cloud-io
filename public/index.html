@@ -3097,6 +3097,9 @@ input[type="password"]::placeholder{
    UI UPGRADE — STORAGE ACCORDION + QUICK ACTION MENU
    Added only; original styles and elements remain intact.
 ========================================================= */
+.storageDetailsCard.storageCompact .storageProviderGrid{display:none;}
+.storageDetailsCard.storageCompact .storageDetailsHead{margin-bottom:0;}
+.storageAccordionButton .accordionChevron{display:inline-block;transition:transform .22s ease;}
 .fileActions{position:relative;}
 .fileActions .fileMoreButton{display:flex;align-items:center;justify-content:center;width:100%;min-height:38px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.045);color:#dbe5f2;border-radius:12px;cursor:pointer;font-size:18px;font-weight:900;line-height:1;letter-spacing:2px;transition:background .18s ease,transform .18s ease;}
 .fileActions .fileMoreButton:hover{background:rgba(255,255,255,.09);transform:translateY(-1px);}
@@ -3361,44 +3364,6 @@ input[type="password"]::placeholder{
                 </span>
 
             </div>
-
-        </section>
-
-
-        <section
-            id="storageDetailsCard"
-            class="storageDetailsCard"
-        >
-
-            <div class="storageDetailsHead">
-
-                <div>
-
-                    <h2 class="storageDetailsTitle">
-                        Storage Locations
-                    </h2>
-
-                    <p class="storageDetailsSub">
-                        See used space and free space for every connected cloud.
-                    </p>
-
-                </div>
-
-                <button
-                    id="storageDetailsRefresh"
-                    class="storageDetailsRefresh"
-                    type="button"
-                >
-                    Refresh
-                </button>
-
-            </div>
-
-
-            <div
-                id="storageProviderGrid"
-                class="storageProviderGrid"
-            ></div>
 
         </section>
 
@@ -4906,144 +4871,6 @@ async function loadStorage(){
         `Free: ${data.remainingText}`;
 
 
-    renderStorageProviders(data);
-}
-
-
-function renderStorageProviders(data){
-
-    if(!storageProviderGrid){
-        return;
-    }
-
-
-    const providers = [
-
-        {
-            key:"mega",
-            name:"MEGA",
-            data:data.mega || {}
-        },
-
-        {
-            key:"cloudinary",
-            name:"Cloudinary",
-            data:data.cloudinary || {}
-        },
-
-        {
-            key:"filebase",
-            name:"Filebase",
-            data:data.filebase || {}
-        },
-
-        {
-            key:"koofr",
-            name:"Koofr",
-            data:data.koofr || {}
-        }
-    ];
-
-
-    storageProviderGrid.innerHTML = "";
-
-
-    providers.forEach(provider => {
-
-        const item =
-            document.createElement("div");
-
-        item.className =
-            "storageProvider";
-
-
-        const configured =
-            provider.data.configured !== false;
-
-        const connected =
-            provider.data.connected !== false;
-
-        const used =
-            Number(
-                provider.data.usedBytes ??
-                provider.data.totalBytes ??
-                0
-            );
-
-        const capacity =
-            Number(
-                provider.data.capacityBytes ??
-                provider.data.limitBytes ??
-                0
-            );
-
-        const remaining =
-            Number(
-                provider.data.remainingBytes ??
-                Math.max(0, capacity - used)
-            );
-
-        const percent =
-            capacity > 0
-                ? Math.min(
-                    100,
-                    (used / capacity) * 100
-                )
-                : 0;
-
-        const safePercent =
-            Number(percent.toFixed(2));
-
-        let statusText = "Connected";
-        let statusClass = "";
-
-        if(!configured){
-            statusText = "Not configured";
-            statusClass = "unconfigured";
-        }else if(!connected){
-            statusText = "Not connected";
-            statusClass = "offline";
-        }else if(safePercent >= 99.5){
-            statusText = "Near storage limit";
-            statusClass = "offline";
-        }
-
-
-        item.innerHTML = `
-            <div class="storageProviderTop">
-                <div class="storageProviderName">
-                    ${escapeHtml(provider.name)}
-                </div>
-                <div class="storageProviderPercent">
-                    ${configured ? safePercent : 0}%
-                </div>
-            </div>
-
-            <div class="storageProviderBar">
-                <div
-                    class="storageProviderFill"
-                    style="width:${configured ? safePercent : 0}%"
-                ></div>
-            </div>
-
-            <div class="storageProviderMeta">
-                <span>Used: ${escapeHtml(
-                    provider.data.usedText ||
-                    formatClientBytes(used)
-                )}</span>
-                <span>Free: ${escapeHtml(
-                    provider.data.remainingText ||
-                    formatClientBytes(remaining)
-                )}</span>
-            </div>
-
-            <div class="storageProviderStatus ${statusClass}">
-                ${escapeHtml(statusText)}
-            </div>
-        `;
-
-        storageProviderGrid.appendChild(item);
-    });
 }
 
 
@@ -5070,6 +4897,30 @@ function formatClientBytes(bytes){
         Math.pow(1024,index)
     ).toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
 }
+
+
+
+
+    const detailsCard = document.getElementById("storageDetailsCard");
+    const head = detailsCard?.querySelector(".storageDetailsHead");
+    if(!detailsCard || !head) return;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "storageAccordionButton";
+    button.innerHTML = `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`;
+
+    button.addEventListener("click", () => {
+        const collapsed = detailsCard.classList.toggle("storageCompact");
+        button.innerHTML = collapsed
+            ? `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`
+            : `Hide <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌃</span>`;
+    });
+
+    head.appendChild(button);
+    detailsCard.classList.add("storageCompact");
+})();
+
 storageDetailsRefresh?.addEventListener(
     "click",
     async () => {
@@ -5902,9 +5753,7 @@ function createFileCard(
     rename.addEventListener(
         "click",
         () => {
-            renameFile(
-                file.name
-            );
+            renameFile(file.name);
         }
     );
 
@@ -6661,36 +6510,25 @@ function closeViewer(){
    RENAME
 ========================================================= */
 
-async function renameFile(
-    name
-){
+async function renameFile(name){
+
+    const currentName =
+        String(name || "").split("/").pop();
 
     const newName =
-        prompt(
-            `Rename "${name}" to:`,
-            name
+        window.prompt(
+            "Enter new file name:",
+            currentName
         );
 
-    if(
-        newName === null
-    ){
+    if(newName === null){
         return;
     }
 
-    const cleanNewName =
-        newName.trim();
+    const trimmed =
+        String(newName).trim();
 
-    if(!cleanNewName){
-        alert(
-            "Enter a valid file name."
-        );
-        return;
-    }
-
-    if(
-        cleanNewName ===
-        name
-    ){
+    if(!trimmed || trimmed === currentName){
         return;
     }
 
@@ -6700,29 +6538,20 @@ async function renameFile(
             {
                 method:"PATCH",
                 headers:{
-                    "Content-Type":
-                        "application/json"
+                    "Content-Type":"application/json"
                 },
-                body:
-                    JSON.stringify({
-                        name,
-                        newName:
-                            cleanNewName
-                    })
+                body:JSON.stringify({
+                    name,
+                    newName:trimmed
+                })
             }
         );
 
-        showToast(
-            "File renamed"
-        );
-
+        showToast("File renamed");
         await loadEverything();
 
     }catch(error){
-
-        alert(
-            error.message
-        );
+        alert(error.message);
     }
 }
 
@@ -6736,22 +6565,14 @@ async function deleteFile(
 ){
 
     const deletePassword =
-        prompt(
+        window.prompt(
             "Enter delete password:"
         );
 
     if(
-        deletePassword === null
+        deletePassword === null ||
+        !String(deletePassword).trim()
     ){
-        return;
-    }
-
-    if(
-        !deletePassword
-    ){
-        alert(
-            "Delete password is required."
-        );
         return;
     }
 
@@ -6759,7 +6580,6 @@ async function deleteFile(
         confirm(
             `Delete "${name}" permanently?`
         );
-
 
     if(!ok){
         return;
@@ -6782,7 +6602,8 @@ async function deleteFile(
                 body:
                     JSON.stringify({
                         name,
-                        deletePassword
+                        deletePassword:
+                            String(deletePassword)
                     })
             }
         );
@@ -6950,27 +6771,44 @@ async function uploadFiles(
     files
 ){
 
-    for(
-        const file of files
-    ){
+    const queue =
+        [...files];
 
-        try{
+    async function worker(){
 
-            await uploadFile(
-                file
-            );
+        while(queue.length){
 
-        }catch(error){
+            const file =
+                queue.shift();
 
-            console.error(
-                error
-            );
+            if(!file){
+                return;
+            }
 
-            alert(
-                `${file.name}: ${error.message}`
-            );
+            try{
+
+                await uploadFile(
+                    file
+                );
+
+            }catch(error){
+
+                console.error(
+                    error
+                );
+
+                alert(
+                    `${file.name}: ${error.message}`
+                );
+            }
         }
     }
+
+    await Promise.all([
+        worker(),
+        worker(),
+        worker()
+    ]);
 }
 
 
@@ -7375,45 +7213,27 @@ async function uploadFiles(
     files
 ){
 
-    const pending =
-        [...files];
+    for(
+        const file of files
+    ){
 
-    const worker = async () => {
+        try{
 
-        while(
-            pending.length
-        ){
+            await uploadFile(
+                file
+            );
 
-            const file =
-                pending.shift();
+        }catch(error){
 
-            if(!file){
-                break;
-            }
+            console.error(
+                error
+            );
 
-            try{
-                await uploadFile(
-                    file
-                );
-
-            }catch(error){
-
-                console.error(
-                    error
-                );
-
-                alert(
-                    `${file.name}: ${error.message}`
-                );
-            }
+            alert(
+                `${file.name}: ${error.message}`
+            );
         }
-    };
-
-    await Promise.all([
-        worker(),
-        worker(),
-        worker()
-    ]);
+    }
 }
 
 
@@ -8127,5 +7947,5 @@ window.addEventListener(
 
 
 
-
-  
+    
+z
