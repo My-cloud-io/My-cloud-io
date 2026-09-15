@@ -402,6 +402,67 @@ button{
     }
 }
 
+/* =========================================================
+   FAST 2.4s LETTER-BY-LETTER WELCOME
+========================================================= */
+
+.introContent{
+    position:relative;
+}
+
+.introContent::before{
+    content:"";
+    position:absolute;
+    left:50%;
+    top:34%;
+    width:260px;
+    height:260px;
+    transform:translate(-50%,-50%);
+    border-radius:50%;
+    background:radial-gradient(circle, rgba(126,184,255,.18) 0%, rgba(103,130,255,.08) 34%, transparent 72%);
+    filter:blur(8px);
+    pointer-events:none;
+}
+
+.introWelcome{
+    position:relative;
+    z-index:1;
+}
+
+.welcomeLetter{
+    display:inline-block;
+    opacity:0;
+    transform:translateY(18px) scale(.88);
+    filter:blur(7px);
+    transition:
+        opacity .28s ease,
+        transform .42s cubic-bezier(.2,.8,.2,1),
+        filter .42s ease;
+}
+
+.welcomeLetter.show{
+    opacity:1;
+    transform:translateY(0) scale(1);
+    filter:blur(0);
+}
+
+.welcomeLetter:nth-child(1){ color:#a9c7ff; }
+.welcomeLetter:nth-child(2){ color:#b7b2ff; }
+.welcomeLetter:nth-child(3){ color:#c3a9ff; }
+.welcomeLetter:nth-child(4){ color:#9fe2ff; }
+.welcomeLetter:nth-child(5){ color:#a8d9ff; }
+.welcomeLetter:nth-child(6){ color:#b8c5ff; }
+.welcomeLetter:nth-child(7){ color:#c6b2ff; }
+
+@media (prefers-reduced-motion: reduce){
+    .welcomeLetter{
+        opacity:1;
+        transform:none;
+        filter:none;
+        transition:none;
+    }
+}
+
 .introWelcome{
 
     margin:0;
@@ -533,9 +594,9 @@ button{
         rgba(143,200,255,.65);
 
     animation:
-        loadingSweep 1.35s
+        loadingSweep 2.35s
         cubic-bezier(.22,.61,.36,1)
-        infinite;
+        1 both;
 }
 
 @keyframes loadingSweep{
@@ -3168,8 +3229,8 @@ input[type="password"]::placeholder{
             ☁
         </div>
 
-        <h1 class="introWelcome">
-            Welcome
+        <h1 class="introWelcome" aria-label="Welcome">
+            <span class="welcomeLetter">W</span><span class="welcomeLetter">e</span><span class="welcomeLetter">l</span><span class="welcomeLetter">c</span><span class="welcomeLetter">o</span><span class="welcomeLetter">m</span><span class="welcomeLetter">e</span>
         </h1>
 
         <p class="introSub">
@@ -7430,15 +7491,6 @@ async function uploadFile(
             file.name
         );
 
-        try{
-            await loadEverything();
-        }catch(error){
-            console.error(
-                "POST-UPLOAD REFRESH ERROR:",
-                error
-            );
-        }
-
         showToast(
             `${file.name} uploaded`
         );
@@ -7462,26 +7514,65 @@ async function uploadFiles(
     files
 ){
 
-    for(
-        const file of files
-    ){
+    /*
+      FAST MULTI-FILE UPLOAD:
+      The file bytes already go directly from the browser to Vercel Blob.
+      Uploading several selected files at the same time keeps the network
+      pipe busy instead of waiting for each file to finish before starting
+      the next one. Four workers is a practical mobile/desktop balance.
+    */
+    const list = Array.from(files || []).filter(
+        file => file && file.size
+    );
 
-        try{
+    if(!list.length){
+        return;
+    }
 
-            await uploadFile(
-                file
-            );
+    const concurrency = Math.min(4, list.length);
+    let nextIndex = 0;
 
-        }catch(error){
+    async function worker(){
+        while(true){
+            const index = nextIndex++;
 
-            console.error(
-                error
-            );
+            if(index >= list.length){
+                return;
+            }
 
-            alert(
-                `${file.name}: ${error.message}`
-            );
+            const file = list[index];
+
+            try{
+                await uploadFile(
+                    file
+                );
+            }catch(error){
+                console.error(
+                    error
+                );
+
+                alert(
+                    `${file.name}: ${error.message}`
+                );
+            }
         }
+    }
+
+    await Promise.all(
+        Array.from(
+            {length: concurrency},
+            () => worker()
+        )
+    );
+
+    /* One refresh after the batch is complete instead of one refresh per file. */
+    try{
+        await loadEverything();
+    }catch(error){
+        console.error(
+            "POST-BATCH REFRESH ERROR:",
+            error
+        );
     }
 }
 
@@ -7900,192 +7991,5 @@ document
     );
 
 
-/* =========================================================
-   QR
-========================================================= */
-
-function openQRCode(){
-
-    qrCode.innerHTML =
-        "";
-
-
-    if(
-        typeof QRCode ===
-        "undefined"
-    ){
-
-        qrCode.textContent =
-            "QR unavailable";
-
-
-        showToast(
-            "QR code library unavailable"
-        );
-
-
-        qrModal.classList.add(
-            "show"
-        );
-
-
-        return;
-    }
-
-
-    const websiteURL =
-        window.location.href;
-
-
-    new QRCode(
-        qrCode,
-        {
-
-            text:
-                websiteURL,
-
-            width:
-                164,
-
-            height:
-                164,
-
-            colorDark:
-                "#07111f",
-
-            colorLight:
-                "#ffffff",
-
-            correctLevel:
-                QRCode.CorrectLevel.M
-        }
-    );
-
-
-    qrModal.classList.add(
-        "show"
-    );
-}
-
-
-function closeQRCode(){
-
-    qrModal.classList.remove(
-        "show"
-    );
-
-    qrCode.innerHTML =
-        "";
-}
-
-
-qrButton.addEventListener(
-    "click",
-    openQRCode
-);
-
-
-qrClose.addEventListener(
-    "click",
-    closeQRCode
-);
-
-
-qrModal.addEventListener(
-    "click",
-    event => {
-
-        if(
-            event.target ===
-            qrModal
-        ){
-
-            closeQRCode();
-        }
-    }
-);
-
-
-/* =========================================================
-   LOAD EVERYTHING
-========================================================= */
-
-async function loadEverything(){
-
-    try{
-
-        await Promise.all([
-            loadStorage(),
-            loadFiles()
-        ]);
-
-    }catch(error){
-
-        console.error(
-            error
-        );
-    }
-}
-
-
-/* =========================================================
-   FORMAT BYTES
-========================================================= */
-
-function formatBytes(
-    bytes
-){
-
-    const value =
-        Number(bytes);
-
-
-    if(
-        !Number.isFinite(value) ||
-        value <= 0
-    ){
-
-        return "0 B";
-    }
-
-
-    const units = [
-        "B",
-        "KB",
-        "MB",
-        "GB",
-        "TB"
-    ];
-
-
-    const index =
-        Math.min(
-            Math.floor(
-                Math.log(value) /
-                Math.log(1024)
-            ),
-            units.length - 1
-        );
-
-
-    return (
-        value /
-        Math.pow(
-            1024,
-            index
-        )
-    )
-        .toFixed(
-            index === 0
-                ? 0
-                : 1
-        ) +
-        " " +
-        units[index];
-}
-
-
-/* =========================================================
-   ESCAPE
-==========================================
+/* =============================
 Preview truncated for large file
