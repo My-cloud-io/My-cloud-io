@@ -3373,6 +3373,8 @@ input[type="password"]::placeholder{
         <section
             id="storageDetailsCard"
             class="storageDetailsCard"
+            aria-hidden="true"
+            style="display:none !important;"
         >
 
             <div class="storageDetailsHead">
@@ -5090,29 +5092,7 @@ function formatClientBytes(bytes){
 
 
 
-/* =========================================================
-   STORAGE ACCORDION — COLLAPSE LONG PROVIDER LIST
-========================================================= */
-(function initStorageAccordion(){
-    const detailsCard = document.getElementById("storageDetailsCard");
-    const head = detailsCard?.querySelector(".storageDetailsHead");
-    if(!detailsCard || !head) return;
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "storageAccordionButton";
-    button.innerHTML = `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`;
-
-    button.addEventListener("click", () => {
-        const collapsed = detailsCard.classList.toggle("storageCompact");
-        button.innerHTML = collapsed
-            ? `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`
-            : `Hide <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌃</span>`;
-    });
-
-    head.appendChild(button);
-    detailsCard.classList.add("storageCompact");
-})();
+/* Connected cloud/provider accordion removed — Vercel Blob is the active storage. */
 
 storageDetailsRefresh?.addEventListener(
     "click",
@@ -5959,6 +5939,27 @@ function createFileCard(
     );
 
 
+    const rename =
+        document.createElement(
+            "button"
+        );
+
+    rename.className =
+        "fileAction";
+
+    rename.textContent =
+        "Rename";
+
+    rename.addEventListener(
+        "click",
+        () => {
+            renameFile(
+                file.name
+            );
+        }
+    );
+
+
     const share =
         document.createElement(
             "button"
@@ -6043,6 +6044,7 @@ function createFileCard(
         open,
         download,
         share,
+        rename,
         more
     );
 
@@ -6179,6 +6181,101 @@ function rememberRecent(
         RECENT_KEY,
         recent
     );
+}
+
+
+/* =========================================================
+   RENAME — REAL VERCEL BLOB RENAME
+========================================================= */
+
+async function renameFile(
+    name
+){
+
+    const currentName =
+        String(name || "").trim();
+
+    if(!currentName){
+        return;
+    }
+
+    const suggested =
+        currentName;
+
+    const newName =
+        window.prompt(
+            `Rename "${currentName}" to:`,
+            suggested
+        );
+
+    if(newName === null){
+        return;
+    }
+
+    const cleaned =
+        newName.trim();
+
+    if(!cleaned || cleaned === currentName){
+        return;
+    }
+
+    try{
+
+        await api(
+            "/api/files",
+            {
+
+                method:"PATCH",
+
+                headers:{
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify({
+                        name:currentName,
+                        newName:cleaned
+                    })
+            }
+        );
+
+        // Keep local UI state consistent with the real storage rename.
+        if(starred.has(currentName)){
+            starred.delete(currentName);
+            starred.add(cleaned);
+            writeJSON(
+                STAR_KEY,
+                [...starred]
+            );
+        }
+
+        recent =
+            recent.map(
+                item =>
+                    item === currentName
+                        ? cleaned
+                        : item
+            );
+
+        writeJSON(
+            RECENT_KEY,
+            recent
+        );
+
+        showToast(
+            "File renamed"
+        );
+
+        await loadEverything();
+
+    }catch(error){
+
+        alert(
+            error.message ||
+            "Rename failed"
+        );
+    }
 }
 
 
@@ -6700,6 +6797,22 @@ async function deleteFile(
 
     try{
 
+        const deletePassword =
+            window.prompt(
+                "Enter your delete password to permanently delete this file:"
+            );
+
+        if(deletePassword === null){
+            return;
+        }
+
+        if(!deletePassword){
+            alert(
+                "Delete password is required."
+            );
+            return;
+        }
+
         await api(
             "/api/files",
             {
@@ -6713,7 +6826,8 @@ async function deleteFile(
 
                 body:
                     JSON.stringify({
-                        name
+                        name,
+                        deletePassword
                     })
             }
         );
@@ -7999,45 +8113,4 @@ document.addEventListener(
 
             searchInput.focus();
         }
-    }
-);
-
-
-/* =========================================================
-   WELCOME / START
-========================================================= */
-
-window.addEventListener(
-    "load",
-    () => {
-
-        setTimeout(
-            welcomeVoice,
-            450
-        );
-
-
-        setTimeout(
-            () => {
-
-                intro.classList.add(
-                    "hide"
-                );
-
-
-                checkAuthentication();
-
-            },
-            2500
-        );
-    }
-);
-
-</script>
-
-</body>
-    </html>
-
-
-
-    
+Preview truncated for large file
