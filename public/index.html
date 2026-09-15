@@ -6906,57 +6906,129 @@ async function uploadFiles(
 
 
 /* =========================================================
-   CHUNK UPLOAD
+   REAL VERCEL BLOB UPLOAD
 ========================================================= */
 
-const CHUNK_SIZE =
-    4 * 1024 * 1024;
+let vercelBlobUpload = null;
+
+async function getVercelBlobUpload(){
+
+    if(vercelBlobUpload){
+        return vercelBlobUpload;
+    }
+
+    const module = await import(
+        "https://esm.sh/@vercel/blob@2.6.1/client"
+    );
+
+    if(typeof module.upload !== "function"){
+        throw new Error(
+            "Vercel Blob upload library could not be loaded."
+        );
+    }
+
+    vercelBlobUpload = module.upload;
+
+    return vercelBlobUpload;
+}
+
+
+async function uploadFiles(
+    files
+){
+
+    for(
+        const file of files
+    ){
+
+        try{
+
+            await uploadFile(
+                file
+            );
+
+        }catch(error){
+
+            console.error(
+                error
+            );
+
+            alert(
+                `${file.name}: ${error.message}`
+            );
+        }
+    }
+}
 
 
 async function uploadFile(
     file
 ){
 
-    const id =
-        cryptoRandomId();
+    if(!file || !file.size){
+        throw new Error(
+            "The selected file is empty."
+        );
+    }
+
+    const upload =
+        await getVercelBlobUpload();
 
     const queue =
         createQueueItem(
             file
         );
 
+    const id =
+        cryptoRandomId();
+
     const relativePath =
         file.webkitRelativePath ||
         file.name;
 
+    const folder =
+        relativePath.includes("/")
+            ? relativePath
+                .split("/")
+                .slice(0,-1)
+                .join("/")
+            : "";
+
+    const safeFolder =
+        folder
+            .split("/")
+            .filter(Boolean)
+            .filter(part => part !== "." && part !== "..")
+            .map(part =>
+                part
+                    .replace(/[\u0000]/g, "")
+                    .trim()
+                    .slice(0,180)
+            )
+            .filter(Boolean)
+            .join("/");
+
+    const pathname =
+        `my-personal-cloud/files/${id}/` +
+        (safeFolder ? `${safeFolder}/` : "") +
+        encodeURIComponent(file.name);
+
+    updateQueue(
+        queue,
+        0,
+        false,
+        0,
+        file.size
+    );
+
     try{
 
-        const module =
-            await import(
-                "https://esm.sh/@vercel/blob@2.4.0/client"
-            );
-
-        const upload =
-            module.upload;
-
-        if(
-            typeof upload !== "function"
-        ){
-            throw new Error(
-                "Vercel Blob upload client could not be loaded"
-            );
-        }
-
-        const pathname =
-            `my-cloud-io/files/${id}/${encodeURIComponent(file.name)}`;
-
-        const result =
+        const blob =
             await upload(
                 pathname,
                 file,
                 {
-                    access:
-                        "private",
+                    access:"private",
 
                     handleUploadUrl:
                         "/api/blob-upload",
@@ -6964,82 +7036,79 @@ async function uploadFile(
                     clientPayload:
                         JSON.stringify({
                             id,
-                            name:
-                                file.name,
-                            relativePath,
-                            size:
-                                file.size,
-                            type:
-                                file.type ||
+                            name:file.name,
+                            relativePath:safeFolder,
+                            size:file.size,
+                            type:file.type ||
                                 "application/octet-stream"
                         }),
 
-                    multipart:
-                        true,
+                    multipart:true,
+
+                    contentType:
+                        file.type ||
+                        "application/octet-stream",
 
                     onUploadProgress:
                         event => {
 
+                            const percent =
+                                Math.max(
+                                    0,
+                                    Math.min(
+                                        100,
+                                        Number(
+                                            event?.percentage
+                                        ) || 0
+                                    )
+                                );
+
+                            const loaded =
+                                Number(
+                                    event?.loaded
+                                ) ||
+                                Math.round(
+                                    file.size *
+                                    percent / 100
+                                );
+
                             updateQueue(
                                 queue,
-                                Number(
-                                    event?.percentage ||
-                                    0
-                                ),
+                                percent,
                                 false,
-                                Number(
-                                    event?.loaded ||
-                                    0
-                                ),
+                                loaded,
                                 file.size
                             );
                         }
                 }
             );
 
-        const registered =
-            await api(
-                "/api/register-upload",
-                {
-                    method:
-                        "POST",
 
-                    headers:{
-                        "Content-Type":
-                            "application/json"
-                    },
+        /*
+          Verify the completed Blob from the server before the UI says that
+          the file is safely stored. This is a small JSON request; the actual
+          file bytes never pass through the Vercel Function.
+        */
+        await api(
+            "/api/register-upload",
+            {
+                method:"POST",
+                headers:{
+                    "Content-Type":
+                        "application/json"
+                },
+                body:
+                    JSON.stringify({
+                        pathname:
+                            blob.pathname,
+                        size:
+                            file.size,
+                        name:
+                            file.name
+                    })
+            }
+        );
 
-                    body:
-                        JSON.stringify({
-                            id,
-                            pathname:
-                                result.pathname,
-                            name:
-                                file.name,
-                            relativePath,
-                            size:
-                                file.size,
-                            type:
-                                file.type ||
-                                "application/octet-stream",
-                            url:
-                                result.url,
-                            downloadUrl:
-                                result.downloadUrl,
-                            etag:
-                                result.etag
-                        })
-                }
-            );
-
-        if(
-            !registered ||
-            !registered.ok
-        ){
-            throw new Error(
-                "Upload completed but file registration failed"
-            );
-        }
 
         updateQueue(
             queue,
@@ -7049,18 +7118,21 @@ async function uploadFile(
             file.size
         );
 
+
         rememberRecent(
             file.name
         );
 
+
         try{
-            await loadEverything();
+            await loadStorage();
         }catch(error){
             console.error(
-                "REFRESH AFTER UPLOAD ERROR:",
+                "STORAGE REFRESH AFTER UPLOAD ERROR:",
                 error
             );
         }
+
 
         showToast(
             `${file.name} uploaded`
@@ -7068,6 +7140,12 @@ async function uploadFile(
 
     }catch(error){
 
+        /*
+          If the browser upload already reached Blob but the tiny verification
+          request failed, do not silently claim success. The Blob remains
+          untouched and can be found after Refresh because completed files are
+          never auto-deleted by this application.
+        */
         updateQueue(
             queue,
             0,
@@ -7789,9 +7867,6 @@ window.addEventListener(
 </body>
     </html>
 
-
-
-    
 
 
     
