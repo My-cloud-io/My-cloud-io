@@ -3112,6 +3112,15 @@ input[type="password"]::placeholder{
 .fileCard.quickActionsOpen .deleteRow{display:flex !important;}
 @media(max-width:760px){.storageProviderGrid{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(220px,82%);overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;padding-bottom:4px;-webkit-overflow-scrolling:touch;}.storageProvider{scroll-snap-align:start;}}
 @media(max-width:470px){.storageAccordionButton{padding:8px 9px;}}
+
+
+/* =========================================================
+   REQUESTED STORAGE PROVIDER CLEANUP
+   Remove the old alternative-provider panel only.
+========================================================= */
+#storageDetailsCard{
+    display:none !important;
+}
 </style>
 
 
@@ -5959,6 +5968,26 @@ function createFileCard(
     );
 
 
+    const rename =
+        document.createElement(
+            "button"
+        );
+
+    rename.className =
+        "fileAction";
+
+    rename.textContent =
+        "Rename";
+
+    rename.addEventListener(
+        "click",
+        () =>
+            renameFile(
+                file.name
+            )
+    );
+
+
     const share =
         document.createElement(
             "button"
@@ -6042,6 +6071,7 @@ function createFileCard(
     actions.append(
         open,
         download,
+        rename,
         share,
         more
     );
@@ -6680,6 +6710,106 @@ function closeViewer(){
 
 
 /* =========================================================
+   RENAME
+========================================================= */
+
+async function renameFile(
+    oldName
+){
+
+    const newName =
+        prompt(
+            `Rename "${oldName}" to:`,
+            oldName
+        );
+
+    if(
+        newName === null
+    ){
+        return;
+    }
+
+    const trimmed =
+        String(
+            newName
+        ).trim();
+
+    if(
+        !trimmed ||
+        trimmed === oldName
+    ){
+        return;
+    }
+
+    try{
+
+        await api(
+            "/api/files",
+            {
+
+                method:"PATCH",
+
+                headers:{
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify({
+                        name:oldName,
+                        newName:trimmed
+                    })
+            }
+        );
+
+        if(
+            starred.has(
+                oldName
+            )
+        ){
+            starred.delete(
+                oldName
+            );
+
+            starred.add(
+                trimmed
+            );
+
+            writeJSON(
+                STAR_KEY,
+                [...starred]
+            );
+        }
+
+        recent =
+            recent.map(
+                item =>
+                    item === oldName
+                        ? trimmed
+                        : item
+            );
+
+        writeJSON(
+            RECENT_KEY,
+            recent
+        );
+
+        showToast(
+            "File renamed"
+        );
+
+        await loadEverything();
+
+    }catch(error){
+
+        alert(
+            error.message
+        );
+    }
+}
+
+
+/* =========================================================
    DELETE
 ========================================================= */
 
@@ -6694,6 +6824,31 @@ async function deleteFile(
 
 
     if(!ok){
+        return;
+    }
+
+
+    const deletePassword =
+        prompt(
+            "Enter Delete Password:"
+        );
+
+    if(
+        deletePassword === null
+    ){
+        return;
+    }
+
+
+    if(
+        !String(
+            deletePassword
+        ).trim()
+    ){
+        alert(
+            "Delete Password is required."
+        );
+
         return;
     }
 
@@ -6713,7 +6868,8 @@ async function deleteFile(
 
                 body:
                     JSON.stringify({
-                        name
+                        name,
+                        deletePassword
                     })
             }
         );
@@ -7931,113 +8087,5 @@ function formatBytes(
 
 /* =========================================================
    ESCAPE
-========================================================= */
-
-function escapeHtml(
-    value
-){
-
-    return String(value)
-
-        .replace(
-            /&/g,
-            "&amp;"
-        )
-
-        .replace(
-            /</g,
-            "&lt;"
-        )
-
-        .replace(
-            />/g,
-            "&gt;"
-        )
-
-        .replace(
-            /"/g,
-            "&quot;"
-        )
-
-        .replace(
-            /'/g,
-            "&#039;"
-        );
-}
-
-
-/* =========================================================
-   KEYBOARD
-========================================================= */
-
-document.addEventListener(
-    "keydown",
-    event => {
-
-        if(
-            event.key ===
-            "Escape"
-        ){
-
-            closeViewer();
-
-            closeQRCode();
-        }
-
-
-        if(
-            event.key === "/" &&
-
-            document.activeElement !==
-                searchInput &&
-
-            document.activeElement !==
-                password
-        ){
-
-            event.preventDefault();
-
-            searchInput.focus();
-        }
-    }
-);
-
-
-/* =========================================================
-   WELCOME / START
-========================================================= */
-
-window.addEventListener(
-    "load",
-    () => {
-
-        setTimeout(
-            welcomeVoice,
-            450
-        );
-
-
-        setTimeout(
-            () => {
-
-                intro.classList.add(
-                    "hide"
-                );
-
-
-                checkAuthentication();
-
-            },
-            2500
-        );
-    }
-);
-
-</script>
-
-</body>
-    </html>
-
-
-
-    
+==========================================
+Preview truncated for large file
