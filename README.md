@@ -1,4 +1,4 @@
-My Personal Cloud / Cloud-Zen — Vercel Final 7.2.0
+My Personal Cloud / Cloud-Zen — Vercel Final 7.1.0
 This build keeps the original index.html UI and its existing file-management API contract, while replacing the Telegram MTProto file-storage path with Vercel Blob Private Storage.
 Project files
 public/index.html — original mobile-first UI, tabs, search, sort, viewer, QR, upload queue, drag/drop, file list and existing controls.
@@ -28,8 +28,3 @@ Maximum file size defaults to 1 TB and can be changed with MAX_FILE_SIZE.
 The file index reads both the current my-personal-cloud/files/ prefix and the legacy my-cloud-io/files/ prefix, so older files already stored in this same Blob store are not hidden by the new pathname.
 Important
 If the Vercel Blob store is not connected, uploads cannot work because there is no storage credential available to the backend. The website now reports that condition clearly instead of failing with req.arrayBuffer() or a generic upload error.
-7.2.0 focused changes
-Removed the visible connected-cloud/provider accordion (Show Clouds / Hide Clouds) and provider cards from the UI.
-Added a real Rename action that uses the Vercel Blob backend copy/delete flow.
-Delete now asks for DELETE_PASSWORD and permanently deletes the selected Blob object from storage.
-No automatic deletion of completed files was added.
