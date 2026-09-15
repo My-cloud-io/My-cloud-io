@@ -1,8 +1,8 @@
 {
   "name": "my-cloud-io",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "private": true,
-  "description": "My-cloud-io private Vercel cloud storage",
+  "description": "My-cloud-io private Vercel cloud storage with direct Vercel Blob uploads",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -17,4 +17,3 @@
     "express": "^5.1.0"
   }
 }
-
