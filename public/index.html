@@ -1,1 +1,1401 @@
+<!DOCTYPE html>
+<html lang="en">
 
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+>
+
+<meta
+    name="theme-color"
+    content="#030308"
+>
+
+<title>My Personal Cloud - Private Access</title>
+
+<style>
+
+/* =========================================================
+   ORIGINAL DASHBOARD VARIABLES — UNCHANGED
+========================================================= */
+
+:root{
+
+    --bg:#07111f;
+    --bg2:#0b1728;
+
+    --panel:rgba(17,31,50,.72);
+    --panel-strong:rgba(20,36,57,.88);
+
+    --text:#f5f8ff;
+    --muted:#91a0b5;
+
+    --blue:#8fc8ff;
+    --blue2:#5daeff;
+
+    --cyan:#8de9ff;
+    --purple:#b7a2ff;
+
+    --green:#7ee7b2;
+    --red:#ff91a9;
+    --yellow:#ffd978;
+
+    --line:rgba(255,255,255,.10);
+    --line2:rgba(143,200,255,.20);
+
+    --shadow:
+        0 25px 80px
+        rgba(0,0,0,.35);
+
+    --radius:24px;
+}
+
+
+/* =========================================================
+   RESET
+========================================================= */
+
+*{
+    box-sizing:border-box;
+}
+
+html{
+    min-height:100%;
+    scroll-behavior:smooth;
+}
+
+body{
+
+    margin:0;
+
+    min-height:100vh;
+
+    color:var(--text);
+
+    font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+    background:
+        radial-gradient(
+            circle at 15% 5%,
+            rgba(72,142,220,.18),
+            transparent 30%
+        ),
+        radial-gradient(
+            circle at 85% 20%,
+            rgba(126,103,220,.13),
+            transparent 30%
+        ),
+        linear-gradient(
+            145deg,
+            #06101d,
+            #091626 48%,
+            #07111f
+        );
+
+    overflow-x:hidden;
+}
+
+button,
+input,
+select{
+    font:inherit;
+}
+
+button{
+    -webkit-tap-highlight-color:transparent;
+}
+
+
+/* =========================================================
+   NEW REAL STAR BACKGROUND
+   FROM YOUR FIRST UI
+========================================================= */
+
+#space-canvas{
+
+    position:fixed;
+
+    inset:0;
+
+    width:100%;
+    height:100%;
+
+    z-index:0;
+
+    pointer-events:none;
+}
+
+
+/* =========================================================
+   CLOUD BACKGROUND
+   DASHBOARD ONLY
+========================================================= */
+
+.cloudScene{
+
+    position:fixed;
+
+    inset:0;
+
+    z-index:1;
+
+    pointer-events:none;
+
+    overflow:hidden;
+}
+
+.cloud{
+
+    position:absolute;
+
+    border-radius:50%;
+
+    filter:blur(35px);
+
+    opacity:.12;
+
+    background:
+        radial-gradient(
+            circle,
+            rgba(145,210,255,.9),
+            rgba(91,155,220,.3) 45%,
+            transparent 72%
+        );
+
+    animation:
+        cloudFloat 14s
+        ease-in-out
+        infinite;
+}
+
+.cloud.c1{
+
+    width:420px;
+    height:220px;
+
+    left:-120px;
+    top:15%;
+
+    animation-delay:-4s;
+}
+
+.cloud.c2{
+
+    width:500px;
+    height:250px;
+
+    right:-180px;
+    top:38%;
+
+    animation-delay:-8s;
+}
+
+.cloud.c3{
+
+    width:330px;
+    height:180px;
+
+    left:30%;
+    bottom:-70px;
+
+    opacity:.07;
+
+    animation-delay:-2s;
+}
+
+@keyframes cloudFloat{
+
+    0%,
+    100%{
+        transform:translate3d(0,0,0) scale(1);
+    }
+
+    50%{
+        transform:translate3d(35px,-18px,0) scale(1.05);
+    }
+}
+
+
+/* =========================================================
+   APP
+========================================================= */
+
+#app{
+
+    position:relative;
+
+    z-index:2;
+
+    min-height:100vh;
+
+    padding:
+        max(18px,env(safe-area-inset-top))
+        16px
+        max(30px,env(safe-area-inset-bottom));
+}
+
+
+/* =========================================================
+   INTRO
+   KEEPING YOUR ORIGINAL INTRO SYSTEM
+========================================================= */
+
+#introScreen{
+
+    position:fixed;
+
+    inset:0;
+
+    z-index:1000;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    background:
+        radial-gradient(
+            circle at center,
+            rgba(30,63,102,.78),
+            rgba(4,10,18,.98) 70%
+        );
+
+    transition:
+        opacity .9s ease,
+        visibility .9s ease;
+}
+
+#introScreen.hide{
+
+    opacity:0;
+
+    visibility:hidden;
+
+    pointer-events:none;
+}
+
+.introContent{
+
+    width:min(
+        520px,
+        90vw
+    );
+
+    text-align:center;
+
+    animation:
+        introAppear .9s
+        ease both;
+}
+
+@keyframes introAppear{
+
+    from{
+        opacity:0;
+        transform:translateY(18px) scale(.97);
+    }
+
+    to{
+        opacity:1;
+        transform:none;
+    }
+}
+
+.introLogo{
+
+    position:relative;
+
+    width:108px;
+    height:108px;
+
+    margin:
+        0 auto 26px;
+
+    display:grid;
+
+    place-items:center;
+
+    border-radius:34px;
+
+    font-size:42px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(143,200,255,.28),
+            rgba(183,162,255,.15)
+        );
+
+    border:
+        1px solid
+        rgba(255,255,255,.20);
+
+    box-shadow:
+        inset 0 0 35px
+        rgba(143,200,255,.15),
+
+        0 0 70px
+        rgba(92,174,255,.18);
+
+    animation:
+        introLogoPulse 2.4s
+        ease-in-out
+        infinite;
+}
+
+.introLogo::before{
+
+    content:"";
+
+    position:absolute;
+
+    inset:-14px;
+
+    border-radius:42px;
+
+    border:
+        1px solid
+        rgba(143,200,255,.16);
+
+    animation:
+        introRing 2.4s
+        ease-out
+        infinite;
+}
+
+@keyframes introLogoPulse{
+
+    0%,
+    100%{
+        transform:scale(1);
+        filter:brightness(1);
+    }
+
+    50%{
+        transform:scale(1.055);
+        filter:brightness(1.28);
+    }
+}
+
+@keyframes introRing{
+
+    0%{
+        opacity:.7;
+        transform:scale(.92);
+    }
+
+    100%{
+        opacity:0;
+        transform:scale(1.15);
+    }
+}
+
+.introWelcome{
+
+    margin:0;
+
+    font-size:
+        clamp(
+            44px,
+            12vw,
+            76px
+        );
+
+    line-height:.95;
+
+    letter-spacing:-.065em;
+
+    font-weight:950;
+
+    background:
+        linear-gradient(
+            90deg,
+            #9ed7ff,
+            #c2b0ff,
+            #a6eaff
+        );
+
+    -webkit-background-clip:text;
+    background-clip:text;
+
+    color:transparent;
+
+    filter:
+        drop-shadow(
+            0 0 22px
+            rgba(143,200,255,.22)
+        );
+
+    animation:
+        welcomeGlow 2.1s
+        ease-in-out
+        infinite;
+}
+
+@keyframes welcomeGlow{
+
+    0%,
+    100%{
+        filter:
+            drop-shadow(
+                0 0 12px
+                rgba(143,200,255,.18)
+            );
+        transform:scale(1);
+    }
+
+    50%{
+        filter:
+            drop-shadow(
+                0 0 35px
+                rgba(143,200,255,.48)
+            );
+        transform:scale(1.025);
+    }
+}
+
+.introSub{
+
+    margin:
+        17px 0 28px;
+
+    color:#9eafc4;
+
+    font-size:14px;
+
+    letter-spacing:.04em;
+}
+
+.loadingLine{
+
+    position:relative;
+
+    width:min(
+        350px,
+        78vw
+    );
+
+    height:4px;
+
+    margin:auto;
+
+    overflow:hidden;
+
+    border-radius:100px;
+
+    background:
+        rgba(255,255,255,.09);
+
+    box-shadow:
+        0 0 20px
+        rgba(143,200,255,.07);
+}
+
+.loadingLine::before{
+
+    content:"";
+
+    position:absolute;
+
+    top:0;
+    bottom:0;
+
+    left:-55%;
+
+    width:55%;
+
+    border-radius:100px;
+
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            #8fc8ff,
+            #c2b0ff,
+            #a6eaff,
+            transparent
+        );
+
+    box-shadow:
+        0 0 15px
+        rgba(143,200,255,.65);
+
+    animation:
+        loadingSweep 1.35s
+        cubic-bezier(.22,.61,.36,1)
+        infinite;
+}
+
+@keyframes loadingSweep{
+
+    from{
+        transform:translateX(0);
+    }
+
+    to{
+        transform:translateX(280%);
+    }
+}
+
+
+/* =========================================================
+   PRIVATE ACCESS LOGIN
+   UPDATED ONLY FOR THE REQUESTED LOGIN VISUAL
+========================================================= */
+
+.loginWrap{
+
+    position:fixed;
+
+    inset:0;
+
+    z-index:900;
+
+    display:none;
+
+    align-items:center;
+
+    justify-content:center;
+
+    padding:
+        max(20px,env(safe-area-inset-top))
+        16px
+        max(20px,env(safe-area-inset-bottom));
+
+    /*
+       Screenshot-style deep blue environment.
+       This applies only to the password screen.
+    */
+
+    background:
+        radial-gradient(
+            ellipse 42% 24% at 50% 6%,
+            rgba(91,239,255,.38),
+            rgba(32,164,205,.18) 30%,
+            transparent 72%
+        ),
+        radial-gradient(
+            ellipse 60% 42% at 50% 112%,
+            rgba(0,214,255,.25),
+            transparent 68%
+        ),
+        radial-gradient(
+            ellipse 80% 75% at 50% 48%,
+            rgba(10,91,126,.22),
+            transparent 70%
+        ),
+        linear-gradient(
+            180deg,
+            #031522 0%,
+            #041c2c 26%,
+            #06253a 52%,
+            #041727 78%,
+            #020a12 100%
+        );
+
+    overflow:hidden;
+}
+
+
+/*
+   Soft cyan light beam from the top,
+   matching the visual feeling of the screenshot.
+*/
+
+.loginWrap::before{
+
+    content:"";
+
+    position:absolute;
+
+    z-index:0;
+
+    top:-18%;
+
+    left:50%;
+
+    width:
+        min(
+            260px,
+            58vw
+        );
+
+    height:82%;
+
+    transform:
+        translateX(-50%)
+        perspective(300px)
+        rotateX(4deg);
+
+    background:
+        linear-gradient(
+            180deg,
+            rgba(147,250,255,.60),
+            rgba(57,222,255,.34) 22%,
+            rgba(13,168,214,.15) 52%,
+            transparent 100%
+        );
+
+    filter:
+        blur(18px);
+
+    opacity:.70;
+
+    clip-path:
+        polygon(
+            35% 0%,
+            65% 0%,
+            100% 100%,
+            0% 100%
+        );
+
+    pointer-events:none;
+
+    animation:
+        loginBeam 6s
+        ease-in-out
+        infinite;
+}
+
+
+/*
+   Narrow bright center beam.
+*/
+
+.loginWrap::after{
+
+    content:"";
+
+    position:absolute;
+
+    z-index:0;
+
+    top:-4%;
+
+    left:50%;
+
+    width:
+        min(
+            95px,
+            22vw
+        );
+
+    height:66%;
+
+    transform:
+        translateX(-50%);
+
+    background:
+        linear-gradient(
+            180deg,
+            rgba(210,255,255,.65),
+            rgba(76,232,255,.25) 45%,
+            transparent 100%
+        );
+
+    filter:
+        blur(17px);
+
+    opacity:.72;
+
+    clip-path:
+        polygon(
+            39% 0%,
+            61% 0%,
+            100% 100%,
+            0% 100%
+        );
+
+    pointer-events:none;
+
+    animation:
+        loginBeamCore 4.5s
+        ease-in-out
+        infinite;
+}
+
+
+@keyframes loginBeam{
+
+    0%,
+    100%{
+        opacity:.52;
+        transform:
+            translateX(-50%)
+            translateY(0)
+            scaleX(.92);
+    }
+
+    50%{
+        opacity:.78;
+        transform:
+            translateX(-50%)
+            translateY(8px)
+            scaleX(1.06);
+    }
+}
+
+
+@keyframes loginBeamCore{
+
+    0%,
+    100%{
+        opacity:.50;
+        filter:blur(18px);
+    }
+
+    50%{
+        opacity:.82;
+        filter:blur(12px);
+    }
+}
+
+
+.loginWrap.show{
+    display:flex;
+}
+
+
+/*
+   Additional soft underwater glow.
+   It stays behind the card and does not affect
+   the dashboard.
+*/
+
+.loginWrap .loginCard::before{
+
+    content:"";
+
+    position:absolute;
+
+    z-index:-1;
+
+    left:50%;
+
+    bottom:-145px;
+
+    width:330px;
+    height:230px;
+
+    transform:
+        translateX(-50%);
+
+    border-radius:50%;
+
+    background:
+        radial-gradient(
+            ellipse,
+            rgba(0,221,255,.22),
+            rgba(0,150,210,.10) 40%,
+            transparent 72%
+        );
+
+    filter:blur(28px);
+
+    pointer-events:none;
+}
+
+
+/* =========================================================
+   FIRST UI GLASS CARD
+========================================================= */
+
+.loginCard{
+
+    position:relative;
+
+    z-index:3;
+
+    width:90%;
+
+    max-width:400px;
+
+    padding:40px 30px;
+
+    text-align:center;
+
+    border-radius:24px;
+
+    border:
+        1px solid
+        rgba(145,225,255,.13);
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(36,63,82,.64),
+            rgba(15,31,46,.70)
+        );
+
+    backdrop-filter:
+        blur(18px);
+
+    -webkit-backdrop-filter:
+        blur(18px);
+
+    box-shadow:
+        0 20px 40px
+        rgba(0,0,0,.50),
+
+        inset 0 1px 0
+        rgba(255,255,255,.06),
+
+        0 0 45px
+        rgba(22,174,220,.07);
+
+    animation:
+        privateCardIn .7s
+        ease both;
+}
+
+@keyframes privateCardIn{
+
+    from{
+
+        opacity:0;
+
+        transform:
+            translateY(20px)
+            scale(.96);
+    }
+
+    to{
+
+        opacity:1;
+
+        transform:
+            translateY(0)
+            scale(1);
+    }
+}
+
+
+/* =========================================================
+   GLOWING ICON
+========================================================= */
+
+.loginIcon{
+
+    position:relative;
+
+    width:60px;
+    height:60px;
+
+    margin:
+        0 auto 20px;
+
+    display:flex;
+
+    justify-content:center;
+
+    align-items:center;
+
+    border-radius:16px;
+
+    background:
+        rgba(73,167,201,.07);
+
+    border:
+        1px solid
+        rgba(144,232,255,.17);
+
+    box-shadow:
+        0 0 15px
+        rgba(77,221,255,.10),
+
+        inset 0 0 20px
+        rgba(74,207,235,.05);
+
+    font-size:0;
+}
+
+
+/*
+   Hide the old emoji and create
+   the glowing star icon.
+*/
+
+.loginIcon::before{
+
+    content:"";
+
+    width:28px;
+    height:28px;
+
+    display:block;
+
+    background:
+        linear-gradient(
+            135deg,
+            #ffb6c1,
+            #ffbe98,
+            #ffe082
+        );
+
+    clip-path:
+        polygon(
+            50% 0%,
+            61% 36%,
+            100% 50%,
+            61% 64%,
+            50% 100%,
+            39% 64%,
+            0% 50%,
+            39% 36%
+        );
+
+    filter:
+        drop-shadow(
+            0 0 8px
+            rgba(255,190,152,.65)
+        );
+
+    animation:
+        loginStarGlow 2s
+        ease-in-out
+        infinite;
+}
+
+@keyframes loginStarGlow{
+
+    0%,
+    100%{
+        transform:scale(1);
+        filter:
+            drop-shadow(
+                0 0 6px
+                rgba(255,190,152,.45)
+            );
+    }
+
+    50%{
+        transform:scale(1.10);
+        filter:
+            drop-shadow(
+                0 0 15px
+                rgba(255,190,152,.85)
+            );
+    }
+}
+
+
+/* =========================================================
+   PRIVATE ACCESS TITLE
+========================================================= */
+
+.loginTitle{
+
+    margin:
+        0 0 8px;
+
+    font-size:28px;
+
+    line-height:1.15;
+
+    font-weight:700;
+
+    letter-spacing:0;
+
+    background:
+        linear-gradient(
+            135deg,
+            #ffd1dc,
+            #ffbe98,
+            #ffe5b4
+        );
+
+    -webkit-background-clip:text;
+
+    background-clip:text;
+
+    -webkit-text-fill-color:transparent;
+
+    color:transparent;
+}
+
+
+/* =========================================================
+   PRIVATE ACCESS DESCRIPTION
+========================================================= */
+
+.loginText{
+
+    margin:
+        0 0 30px;
+
+    color:#a9c1d0;
+
+    font-size:14px;
+
+    line-height:1.5;
+}
+
+
+/* =========================================================
+   PASSWORD LABEL
+   HIDDEN TO MATCH FIRST UI
+========================================================= */
+
+.loginLabel{
+
+    display:none;
+}
+
+
+/* =========================================================
+   PASSWORD INPUT
+========================================================= */
+
+input[type="password"]{
+
+    width:100%;
+
+    padding:
+        14px 18px;
+
+    background:
+        rgba(7,25,38,.76);
+
+    border:
+        1px solid
+        rgba(255,201,184,.48);
+
+    border-radius:12px;
+
+    color:#fff;
+
+    font-size:15px;
+
+    outline:none;
+
+    transition:
+        all .3s ease;
+
+    box-shadow:
+        inset 0 0 18px
+        rgba(0,0,0,.08);
+}
+
+input[type="password"]:focus{
+
+    border-color:#ffc5aa;
+
+    box-shadow:
+        0 0 10px
+        rgba(255,190,152,.20),
+
+        0 0 0 2px
+        rgba(255,190,152,.06);
+}
+
+input[type="password"]::placeholder{
+
+    color:#8297a8;
+}
+
+
+/* =========================================================
+   ENTER WEBSITE BUTTON
+========================================================= */
+
+.primary{
+
+    width:100%;
+
+    margin-top:20px;
+
+    padding:14px;
+
+    border:none;
+
+    border-radius:12px;
+
+    color:#1a1a1a;
+
+    font-size:16px;
+
+    font-weight:600;
+
+    cursor:pointer;
+
+    background:
+        linear-gradient(
+            135deg,
+            #ffb6c1,
+            #ffbe98,
+            #ffe082
+        );
+
+    box-shadow:
+        0 4px 15px
+        rgba(255,190,152,.30);
+
+    transition:
+        transform .2s ease,
+        box-shadow .2s ease,
+        filter .2s ease;
+}
+
+.primary:hover{
+
+    transform:
+        translateY(-2px);
+
+    box-shadow:
+        0 6px 20px
+        rgba(255,190,152,.40);
+
+    filter:brightness(1.04);
+}
+
+.primary:active{
+
+    transform:
+        translateY(0);
+}
+
+.primary:disabled{
+
+    opacity:.65;
+
+    cursor:not-allowed;
+
+    transform:none;
+}
+
+
+/* =========================================================
+   ERROR
+========================================================= */
+
+.errorText{
+
+    min-height:20px;
+
+    margin-top:12px;
+
+    color:#ff9eb8;
+
+    font-size:13px;
+}
+
+
+/* =========================================================
+   DASHBOARD
+   ORIGINAL SETTINGS
+========================================================= */
+
+.dashboard{
+
+    display:none;
+
+    max-width:1220px;
+
+    margin:auto;
+
+    animation:
+        dashboardAppear .6s
+        ease both;
+}
+
+.dashboard.show{
+    display:block;
+}
+
+@keyframes dashboardAppear{
+
+    from{
+        opacity:0;
+        transform:translateY(12px);
+    }
+
+    to{
+        opacity:1;
+        transform:none;
+    }
+}
+
+
+/* =========================================================
+   TOPBAR
+========================================================= */
+
+.topbar{
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:space-between;
+
+    gap:15px;
+
+    padding:
+        7px 0 22px;
+}
+
+.brand{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:12px;
+}
+
+.brandLogo{
+
+    width:49px;
+    height:49px;
+
+    display:grid;
+
+    place-items:center;
+
+    border-radius:16px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(143,200,255,.20),
+            rgba(183,162,255,.13)
+        );
+
+    border:
+        1px solid
+        var(--line);
+
+    box-shadow:
+        inset 0 0 20px
+        rgba(143,200,255,.10);
+}
+
+.brandTitle{
+
+    margin:0;
+
+    font-size:18px;
+
+    font-weight:950;
+}
+
+.brandStatus{
+
+    margin:3px 0 0;
+
+    color:#7ee7b2;
+
+    font-size:11px;
+}
+
+.topActions{
+
+    display:flex;
+
+    gap:8px;
+
+    align-items:center;
+}
+
+.iconButton,
+.logout{
+
+    min-width:42px;
+    min-height:42px;
+
+    border:
+        1px solid
+        var(--line);
+
+    background:
+        rgba(255,255,255,.045);
+
+    color:#dbe5f2;
+
+    padding:10px 13px;
+
+    border-radius:13px;
+
+    cursor:pointer;
+
+    transition:
+        transform .18s ease,
+        background .18s ease;
+}
+
+.iconButton:hover,
+.logout:hover{
+
+    background:
+        rgba(255,255,255,.08);
+
+    transform:translateY(-1px);
+}
+
+.qrButton{
+
+    min-width:42px;
+
+    padding:
+        10px 11px;
+
+    font-size:11px;
+
+    font-weight:850;
+
+    white-space:nowrap;
+}
+
+
+/* =========================================================
+   STORAGE
+========================================================= */
+
+.storageCard{
+
+    position:relative;
+
+    overflow:hidden;
+
+    padding:23px;
+
+    border:
+        1px solid
+        var(--line);
+
+    border-radius:26px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(24,44,68,.82),
+            rgba(10,22,36,.76)
+        );
+
+    backdrop-filter:
+        blur(22px);
+
+    box-shadow:
+        var(--shadow);
+}
+
+.storageCard::after{
+
+    content:"";
+
+    position:absolute;
+
+    width:180px;
+ 
