@@ -25,6 +25,41 @@ const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
+/*
+   SMALL-FILE FALLBACK UPLOAD
+   This route is intentionally registered before express.json() so binary
+   file bytes are never interpreted as JSON. It is only used as a fallback
+   for files up to 4 MB; larger files continue through the direct signed Blob
+   upload path so the Vercel Function request limit is not exceeded.
+*/
+app.post("/api/upload-small", express.raw({ type: "*/*", limit: "4mb" }), requireAuth, async (req, res) => {
+  try {
+    const pathname = String(req.headers["x-upload-pathname"] || "");
+    const size = Number(req.headers["x-upload-size"] || 0);
+    const contentType = String(req.headers["x-upload-content-type"] || "application/octet-stream").slice(0, 180);
+
+    if (!pathname.startsWith(FILE_PREFIX)) return jsonError(res, 400, "Invalid upload path");
+    if (!Number.isSafeInteger(size) || size <= 0 || size > 4 * 1024 * 1024) {
+      return jsonError(res, 413, "Small upload fallback is limited to 4 MB.");
+    }
+    if (!Buffer.isBuffer(req.body) || req.body.length !== size) {
+      return jsonError(res, 400, "Upload size verification failed.");
+    }
+
+    const blob = await put(pathname, req.body, {
+      access: "private",
+      addRandomSuffix: false,
+      allowOverwrite: false,
+      contentType
+    });
+
+    res.json({ ok: true, blob, pathname: blob.pathname, size: blob.size, contentType: blob.contentType });
+  } catch (error) {
+    console.error("SMALL UPLOAD ERROR:", error?.stack || error);
+    return jsonError(res, 400, error?.message || "Upload failed");
+  }
+});
+
 const PORT = Number(process.env.PORT || 3000);
 const HOST = "0.0.0.0";
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -412,11 +447,15 @@ app.post("/api/blob-upload-url", requireAuth, async (req, res) => {
     // A short-lived URL is scoped to this exact pathname and PUT operation.
     // The file bytes go directly from the browser to Vercel Blob, never through
     // the Vercel Function, so the Function 4.5 MB request limit is avoided.
-    const token = await issueSignedToken({
+    const tokenOptions = {
       pathname,
       operations: ["put"],
       validUntil: Date.now() + 15 * 60 * 1000
-    });
+    };
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      tokenOptions.token = process.env.BLOB_READ_WRITE_TOKEN;
+    }
+    const token = await issueSignedToken(tokenOptions);
 
     const signed = await presignUrl(token, {
       pathname,
