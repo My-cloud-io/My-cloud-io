@@ -3671,6 +3671,38 @@ input[type="password"]::placeholder{
 <div id="toast"></div>
 
 
+
+<!-- =======================================================
+     WELCOME FAILSAFE
+     Independent from the application JavaScript.
+======================================================= -->
+<script>
+(function(){
+    var introScreen = document.getElementById("introScreen");
+    var loginScreen = document.getElementById("loginWrap");
+
+    if(!introScreen){
+        return;
+    }
+
+    function openPrivateAccess(){
+        if(loginScreen){
+            loginScreen.classList.add("show");
+        }
+
+        introScreen.classList.add("hide");
+
+        /* CSS fade is 0.45s; this hard stop prevents any stuck screen. */
+        setTimeout(function(){
+            introScreen.style.display = "none";
+        }, 450);
+    }
+
+    /* Welcome -> Private Access in under 3 seconds, regardless of app/API loading. */
+    setTimeout(openPrivateAccess, 2500);
+})();
+</script>
+
 <script>
 
 /* =========================================================
@@ -7935,59 +7967,5 @@ document
                     "listView"
                 )
                 .classList.add(
-                    "active"
-                );
-
-
-            document
-                .getElementById(
-                    "gridView"
-                )
-                .classList.remove(
-                    "active"
-                );
-
-
-            localStorage.setItem(
-                VIEW_KEY,
-                "list"
-            );
-        }
-    );
-
-
-/* =========================================================
-   REFRESH
-========================================================= */
-
-async function refreshAll(){
-
-    const buttons = [
-
-        document.getElementById(
-            "refreshButton"
-        ),
-
-        document.getElementById(
-            "topRefresh"
-        )
-    ];
-
-
-    buttons.forEach(
-        button =>
-            button.classList.add(
-                "spinning"
-            )
-    );
-
-
-    try{
-
-        await loadEverything();
-
-    }finally{
-
-        setTimeout(
-
+                    "acti
 Preview truncated for large file
