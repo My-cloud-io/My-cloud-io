@@ -3215,20 +3215,32 @@ input[type="password"]::placeholder{
             </label>
 
 
-            <input
-                id="password"
-                type="password"
-                placeholder="Enter password"
-                autocomplete="current-password"
+            <form
+                id="loginForm"
+                method="POST"
+                action="/api/auth/login"
+                autocomplete="on"
             >
 
+                <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    placeholder="Enter password"
+                    autocomplete="current-password"
+                    required
+                >
 
-            <button
-                id="loginButton"
-                class="primary"
-            >
-                Enter Website
-            </button>
+
+                <button
+                    id="loginButton"
+                    class="primary"
+                    type="submit"
+                >
+                    Enter Website
+                </button>
+
+            </form>
 
 
             <div
@@ -3250,6 +3262,7 @@ input[type="password"]::placeholder{
     (function(){
         var passwordEl = document.getElementById("password");
         var buttonEl = document.getElementById("loginButton");
+        var formEl = document.getElementById("loginForm");
         var errorEl = document.getElementById("loginError");
         var loginEl = document.getElementById("loginWrap");
         var dashboardEl = document.getElementById("dashboard");
@@ -3338,6 +3351,14 @@ input[type="password"]::placeholder{
             event.stopImmediatePropagation();
             unlockNow();
         }, true);
+
+        if(formEl){
+            formEl.addEventListener("submit", function(event){
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                unlockNow();
+            }, true);
+        }
 
         passwordEl.addEventListener("keydown", function(event){
             if(event.key === "Enter"){
@@ -7772,51 +7793,5 @@ function createQueueItem(
 
 
     const top =
-        document.createElement(
-            "div"
-        );
-
-    top.className =
-        "queueTop";
-
-
-    const name =
-        document.createElement(
-            "div"
-        );
-
-    name.className =
-        "queueName";
-
-    name.textContent =
-        file.name;
-
-
-    const percent =
-        document.createElement(
-            "div"
-        );
-
-    percent.className =
-        "queuePercent";
-
-    percent.textContent =
-        "0%";
-
-
-    top.append(
-        name,
-        percent
-    );
-
-
-    const remaining =
-        document.createElement(
-            "div"
-        );
-
-    remaining.className =
-        "queueRemaining";
-
-    remai
+        docum
 Preview truncated for large file
