@@ -3240,6 +3240,115 @@ input[type="password"]::placeholder{
 
     </section>
 
+    <!-- =========================================================
+         LOGIN FAILSAFE BRIDGE
+         This small isolated handler guarantees that the App Password
+         button can submit even if another frontend initializer fails.
+         It does NOT change the Welcome screen.
+    ========================================================= -->
+    <script>
+    (function(){
+        var passwordEl = document.getElementById("password");
+        var buttonEl = document.getElementById("loginButton");
+        var errorEl = document.getElementById("loginError");
+        var loginEl = document.getElementById("loginWrap");
+        var dashboardEl = document.getElementById("dashboard");
+        var busy = false;
+
+        if(!passwordEl || !buttonEl || !loginEl || !dashboardEl){
+            return;
+        }
+
+        function setError(message){
+            if(errorEl){ errorEl.textContent = message || ""; }
+        }
+
+        async function unlockNow(){
+            if(busy){ return; }
+
+            var value = passwordEl.value;
+            setError("");
+
+            if(!value){
+                setError("Please enter your password.");
+                passwordEl.focus();
+                return;
+            }
+
+            busy = true;
+            buttonEl.disabled = true;
+            buttonEl.textContent = "Unlocking...";
+
+            try{
+                var response = await fetch("/api/auth/login", {
+                    method: "POST",
+                    credentials: "same-origin",
+                    cache: "no-store",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    },
+                    body: JSON.stringify({ password: value })
+                });
+
+                var data = null;
+                try { data = await response.json(); } catch(_){ }
+
+                if(!response.ok){
+                    throw new Error(
+                        data && data.error
+                            ? data.error
+                            : "Unable to verify password."
+                    );
+                }
+
+                passwordEl.value = "";
+                setError("");
+                loginEl.classList.remove("show");
+                dashboardEl.classList.add("show");
+
+                /* Let the existing app loader populate files/storage if available. */
+                try{
+                    if(typeof loadEverything === "function"){
+                        await loadEverything();
+                    }else if(typeof initApp === "function"){
+                        await initApp();
+                    }else if(typeof startApp === "function"){
+                        await startApp();
+                    }
+                }catch(loadError){
+                    console.error("Post-login cloud loading failed:", loadError);
+                }
+            }catch(error){
+                setError(error && error.message ? error.message : "Unable to verify password.");
+                passwordEl.focus();
+            }finally{
+                busy = false;
+                buttonEl.disabled = false;
+                buttonEl.textContent = "Enter Website";
+            }
+        }
+
+        window.__cloudPasswordLogin = unlockNow;
+
+        /* Capture phase + stopImmediatePropagation prevents a broken/duplicate
+           later initializer from swallowing or duplicating the login request. */
+        buttonEl.addEventListener("click", function(event){
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            unlockNow();
+        }, true);
+
+        passwordEl.addEventListener("keydown", function(event){
+            if(event.key === "Enter"){
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                unlockNow();
+            }
+        }, true);
+    })();
+    </script>
+
 
     <!-- ===================================================
          DASHBOARD
@@ -7709,231 +7818,5 @@ function createQueueItem(
     remaining.className =
         "queueRemaining";
 
-    remaining.textContent =
-        `${formatClientBytes(0)} uploaded • ${formatClientBytes(file.size)} left`;
-
-
-    const track =
-        document.createElement(
-            "div"
-        );
-
-    track.className =
-        "queueProgress";
-
-
-    const bar =
-        document.createElement(
-            "div"
-        );
-
-
-    track.appendChild(
-        bar
-    );
-
-
-    item.append(
-        top,
-        remaining,
-        track
-    );
-
-
-    uploadQueue.appendChild(
-        item
-    );
-
-
-    return {
-        item,
-        percent,
-        remaining,
-        bar
-    };
-}
-
-
-function updateQueue(
-    queue,
-    value,
-    done = false,
-    uploadedBytes = 0,
-    totalBytes = 0
-){
-
-    const rounded =
-        Math.min(
-            100,
-            Math.max(
-                0,
-                Math.round(
-                    value
-                )
-            )
-        );
-
-
-    queue.percent.textContent =
-        done
-            ? "✓"
-            : `${rounded}%`;
-
-
-    queue.bar.style.width =
-        `${rounded}%`;
-
-
-    if(queue.remaining){
-
-        const remainingBytes =
-            Math.max(
-                0,
-                Number(totalBytes || 0) -
-                Number(uploadedBytes || 0)
-            );
-
-        queue.remaining.textContent =
-            done
-                ? "Complete"
-                : `${formatClientBytes(uploadedBytes)} uploaded • ${formatClientBytes(remainingBytes)} left`;
-    }
-
-
-    if(done){
-
-        setTimeout(
-            () => {
-
-                queue.item.remove();
-
-            },
-            1600
-        );
-    }
-}
-
-
-
-/* =========================================================
-   RANDOM ID
-========================================================= */
-
-function cryptoRandomId(){
-
-    if(
-        window.crypto &&
-        crypto.randomUUID
-    ){
-
-        return crypto.randomUUID();
-    }
-
-
-    return (
-        Date.now()
-            .toString(36) +
-        "-" +
-        Math.random()
-            .toString(36)
-            .slice(2)
-    );
-}
-
-
-/* =========================================================
-   SEARCH
-========================================================= */
-
-searchInput.addEventListener(
-    "input",
-    renderFiles
-);
-
-
-sortSelect.addEventListener(
-    "change",
-    renderFiles
-);
-
-
-/* =========================================================
-   TABS
-========================================================= */
-
-document
-    .querySelectorAll(
-        ".cloudTab"
-    )
-    .forEach(
-        tab => {
-
-            tab.addEventListener(
-                "click",
-                () => {
-
-                    document
-                        .querySelectorAll(
-                            ".cloudTab"
-                        )
-                        .forEach(
-                            item =>
-                                item.classList.remove(
-                                    "active"
-                                )
-                        );
-
-
-                    tab.classList.add(
-                        "active"
-                    );
-
-
-                    activeTab =
-                        tab.dataset.tab;
-
-
-                    renderFiles();
-                }
-            );
-        }
-    );
-
-
-/* =========================================================
-   VIEW SWITCH
-========================================================= */
-
-document
-    .getElementById(
-        "gridView"
-    )
-    .addEventListener(
-        "click",
-        () => {
-
-            currentView =
-                "grid";
-
-
-            fileList.classList.remove(
-                "listView"
-            );
-
-
-            document
-                .getElementById(
-                    "gridView"
-                )
-                .classList.add(
-                    "active"
-                );
-
-
-            document
-                .getElementById(
-                    "listView"
-                )
-                .classList.remove(
-              
+    remai
 Preview truncated for large file
