@@ -367,13 +367,12 @@ app.get("/api/storage", requireAuth, async (req, res) => {
       usedPercent: percent,
       limitText: "Cloud",
       provider: { configured: storage.configured, connected: storage.connected, usedText: formatBytes(used), remainingText: storage.connected ? "Vercel Blob" : "Not connected" },
-      // Legacy provider fields intentionally report disabled; production storage is Vercel Blob only.
-      b2: { configured: false, connected: false, hidden: true },
-      mega: { configured: false, connected: false, hidden: true },
-      idriveE2: { configured: false, connected: false, hidden: true },
-      cloudinary: { configured: false, connected: false, hidden: true },
-      filebase: { configured: false, connected: false, hidden: true },
-      koofr: { configured: false, connected: false, hidden: true },
+      b2: { configured: false, connected: false },
+      mega: { configured: false, connected: false },
+      idriveE2: { configured: false, connected: false },
+      cloudinary: { configured: false, connected: false },
+      filebase: { configured: false, connected: false },
+      koofr: { configured: false, connected: false },
       vercelBlob: { configured: storage.configured, connected: storage.connected },
       retention: "PERMANENT UNTIL MANUAL DELETE",
       autoDelete: false
@@ -751,3 +750,4 @@ if (!process.env.VERCEL) {
 }
 
 module.exports = app;
+
