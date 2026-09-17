@@ -4989,39 +4989,9 @@ function renderStorageProviders(data){
     const providers = [
 
         {
-            key:"b2",
-            name:"Backblaze B2",
-            data:data.b2 || {}
-        },
-
-        {
-            key:"mega",
-            name:"MEGA",
-            data:data.mega || {}
-        },
-
-        {
-            key:"idriveE2",
-            name:"IDrive E2",
-            data:data.idriveE2 || {}
-        },
-
-        {
-            key:"cloudinary",
-            name:"Cloudinary",
-            data:data.cloudinary || {}
-        },
-
-        {
-            key:"filebase",
-            name:"Filebase",
-            data:data.filebase || {}
-        },
-
-        {
-            key:"koofr",
-            name:"Koofr",
-            data:data.koofr || {}
+            key:"vercelBlob",
+            name:"Vercel Blob",
+            data:data.vercelBlob || {}
         }
     ];
 
@@ -7936,5 +7906,34 @@ document
 
 document
     .getElementById(
-   
+        "gridView"
+    )
+    .addEventListener(
+        "click",
+        () => {
+
+            currentView =
+                "grid";
+
+
+            fileList.classList.remove(
+                "listView"
+            );
+
+
+            document
+                .getElementById(
+                    "gridView"
+                )
+                .classList.add(
+                    "active"
+                );
+
+
+            document
+                .getElementById(
+                    "listView"
+                )
+                .classList.remove(
+              
 Preview truncated for large file
