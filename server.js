@@ -25,41 +25,6 @@ const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
-/*
-   SMALL-FILE FALLBACK UPLOAD
-   This route is intentionally registered before express.json() so binary
-   file bytes are never interpreted as JSON. It is only used as a fallback
-   for files up to 4 MB; larger files continue through the direct signed Blob
-   upload path so the Vercel Function request limit is not exceeded.
-*/
-app.post("/api/upload-small", express.raw({ type: "*/*", limit: "4mb" }), requireAuth, async (req, res) => {
-  try {
-    const pathname = String(req.headers["x-upload-pathname"] || "");
-    const size = Number(req.headers["x-upload-size"] || 0);
-    const contentType = String(req.headers["x-upload-content-type"] || "application/octet-stream").slice(0, 180);
-
-    if (!pathname.startsWith(FILE_PREFIX)) return jsonError(res, 400, "Invalid upload path");
-    if (!Number.isSafeInteger(size) || size <= 0 || size > 4 * 1024 * 1024) {
-      return jsonError(res, 413, "Small upload fallback is limited to 4 MB.");
-    }
-    if (!Buffer.isBuffer(req.body) || req.body.length !== size) {
-      return jsonError(res, 400, "Upload size verification failed.");
-    }
-
-    const blob = await put(pathname, req.body, {
-      access: "private",
-      addRandomSuffix: false,
-      allowOverwrite: false,
-      contentType
-    });
-
-    res.json({ ok: true, blob, pathname: blob.pathname, size: blob.size, contentType: blob.contentType });
-  } catch (error) {
-    console.error("SMALL UPLOAD ERROR:", error?.stack || error);
-    return jsonError(res, 400, error?.message || "Upload failed");
-  }
-});
-
 const PORT = Number(process.env.PORT || 3000);
 const HOST = "0.0.0.0";
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -67,28 +32,9 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 /* =========================
    ENVIRONMENT / SECRETS
 ========================= */
-function readSecret(name, aliases = []) {
-  const names = [name, ...aliases];
-  for (const key of names) {
-    if (process.env[key] !== undefined && process.env[key] !== null) {
-      const value = String(process.env[key]);
-      // Vercel Environment Variables are normally stored without quotes,
-      // but tolerate one accidental pair of matching outer quotes.
-      if (value.length >= 2 &&
-          ((value.startsWith("\"") && value.endsWith("\"")) ||
-           (value.startsWith("'") && value.endsWith("'")))) {
-        return value.slice(1, -1);
-      }
-      return value;
-    }
-  }
-  return "";
-}
-
-const APP_PASSWORD = readSecret("APP_PASSWORD", ["APP_PASS", "CLOUD_PASSWORD"]).trim();
-const DELETE_PASSWORD = readSecret("DELETE_PASSWORD", ["DELETE_PASS"]);
-const LINK_PASSWORD = readSecret("LINK_PASSWORD", ["SHARE_PASSWORD"]);
-const SESSION_SECRET = String(process.env.SESSION_SECRET ?? "").trim() || crypto.createHash("sha256").update(`my-personal-cloud-session|${APP_PASSWORD}`).digest("hex");
+const APP_PASSWORD = String(process.env.APP_PASSWORD ?? "").trim();
+const DELETE_PASSWORD = String(process.env.DELETE_PASSWORD ?? "").trim();
+const SESSION_SECRET = String(process.env.SESSION_SECRET ?? "").trim();
 const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 1024 * 1024 * 1024 * 1024);
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
@@ -362,42 +308,18 @@ async function findByPathname(pathname) {
    AUTH
 ========================= */
 app.post("/api/auth/login", (req, res) => {
-  try {
-    if (!APP_PASSWORD) return jsonError(res, 500, "APP_PASSWORD is not configured in Vercel.");
-
-    // Accept JSON, form submissions, and raw text. The native HTML form is
-    // an intentional fallback so login still works even if another frontend
-    // script fails to initialize.
-    let password = "";
-    if (typeof req.body === "string") {
-      password = req.body;
-    } else if (Buffer.isBuffer(req.body)) {
-      password = req.body.toString("utf8");
-    } else {
-      password = String(req.body?.password ?? "");
-    }
-
-    if (!safeEqual(password, APP_PASSWORD)) {
-      const locked = registerFailure(req, "login");
-      return jsonError(res, locked ? 423 : 401, locked ? "Access locked for 24 hours." : "Incorrect password");
-    }
-
-    // A correct password is always allowed. A previous failed-attempt lock
-    // must never block the owner who now supplies the correct password.
-    clearFailures(req, "login");
-
-    const secure = Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
-    const token = encodeURIComponent(makeSession());
-    res.setHeader("Set-Cookie", `cloud_zen_session=${token}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
-
-    const acceptsHtml = /text\/html/i.test(String(req.headers.accept || "")) && !/application\/json/i.test(String(req.headers.accept || ""));
-    if (acceptsHtml) return res.redirect(303, "/");
-
-    return res.json({ ok: true });
-  } catch (error) {
-    console.error("AUTH LOGIN ERROR:", error?.stack || error);
-    return jsonError(res, 500, "Unable to verify password. Please try again.");
+  if (isLocked(req, "login")) return jsonError(res, 423, "Access locked for 24 hours on this device.");
+  if (!APP_PASSWORD) return jsonError(res, 500, "APP_PASSWORD is not configured in Vercel.");
+  const password = String(req.body?.password || "");
+  if (!safeEqual(password, APP_PASSWORD)) {
+    const locked = registerFailure(req, "login");
+    return jsonError(res, locked ? 423 : 401, locked ? "Access locked for 24 hours." : "Incorrect password");
   }
+  clearFailures(req, "login");
+  const secure = Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
+  const token = encodeURIComponent(makeSession());
+  res.setHeader("Set-Cookie", `cloud_zen_session=${token}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
+  res.json({ ok: true });
 });
 
 app.get("/api/auth/me", (req, res) => res.json({ authenticated: Boolean(getSession(req)) }));
@@ -445,6 +367,13 @@ app.get("/api/storage", requireAuth, async (req, res) => {
       usedPercent: percent,
       limitText: "Cloud",
       provider: { configured: storage.configured, connected: storage.connected, usedText: formatBytes(used), remainingText: storage.connected ? "Vercel Blob" : "Not connected" },
+      // Legacy provider fields intentionally report disabled; production storage is Vercel Blob only.
+      b2: { configured: false, connected: false, hidden: true },
+      mega: { configured: false, connected: false, hidden: true },
+      idriveE2: { configured: false, connected: false, hidden: true },
+      cloudinary: { configured: false, connected: false, hidden: true },
+      filebase: { configured: false, connected: false, hidden: true },
+      koofr: { configured: false, connected: false, hidden: true },
       vercelBlob: { configured: storage.configured, connected: storage.connected },
       retention: "PERMANENT UNTIL MANUAL DELETE",
       autoDelete: false
@@ -484,15 +413,11 @@ app.post("/api/blob-upload-url", requireAuth, async (req, res) => {
     // A short-lived URL is scoped to this exact pathname and PUT operation.
     // The file bytes go directly from the browser to Vercel Blob, never through
     // the Vercel Function, so the Function 4.5 MB request limit is avoided.
-    const tokenOptions = {
+    const token = await issueSignedToken({
       pathname,
       operations: ["put"],
       validUntil: Date.now() + 15 * 60 * 1000
-    };
-    if (process.env.BLOB_READ_WRITE_TOKEN) {
-      tokenOptions.token = process.env.BLOB_READ_WRITE_TOKEN;
-    }
-    const token = await issueSignedToken(tokenOptions);
+    });
 
     const signed = await presignUrl(token, {
       pathname,
@@ -721,8 +646,7 @@ app.post("/api/shared-access", async (req, res) => {
   const token = String(req.body?.token || "");
   const data = verifyShareToken(token);
   if (!data) return jsonError(res, 410, "Share link expired or invalid.");
-  const configuredLinkPassword = LINK_PASSWORD || APP_PASSWORD;
-  if (!configuredLinkPassword || !safeEqual(String(req.body?.password || ""), configuredLinkPassword)) return jsonError(res, 403, "Incorrect link password.");
+  if (!APP_PASSWORD || !safeEqual(String(req.body?.password || ""), APP_PASSWORD)) return jsonError(res, 403, "Incorrect Enter password.");
   const sharedToken = signPayload({ type: "shared-download", tokenHash: crypto.createHash("sha256").update(token).digest("hex"), exp: Date.now() + 15 * 60 * 1000 });
   const secure = Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
   res.setHeader("Set-Cookie", `cloud_zen_shared_download_access=${encodeURIComponent(sharedToken)}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=900`);
@@ -827,4 +751,3 @@ if (!process.env.VERCEL) {
 }
 
 module.exports = app;
-  
