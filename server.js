@@ -69,7 +69,8 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 ========================= */
 const APP_PASSWORD = String(process.env.APP_PASSWORD ?? "").trim();
 const DELETE_PASSWORD = String(process.env.DELETE_PASSWORD ?? "").trim();
-const SESSION_SECRET = String(process.env.SESSION_SECRET ?? "").trim();
+const LINK_PASSWORD = String(process.env.LINK_PASSWORD ?? "").trim();
+const SESSION_SECRET = String(process.env.SESSION_SECRET ?? "").trim() || crypto.createHash("sha256").update(`my-personal-cloud-session|${APP_PASSWORD}`).digest("hex");
 const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 1024 * 1024 * 1024 * 1024);
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
@@ -402,12 +403,6 @@ app.get("/api/storage", requireAuth, async (req, res) => {
       usedPercent: percent,
       limitText: "Cloud",
       provider: { configured: storage.configured, connected: storage.connected, usedText: formatBytes(used), remainingText: storage.connected ? "Vercel Blob" : "Not connected" },
-      b2: { configured: false, connected: false },
-      mega: { configured: false, connected: false },
-      idriveE2: { configured: false, connected: false },
-      cloudinary: { configured: false, connected: false },
-      filebase: { configured: false, connected: false },
-      koofr: { configured: false, connected: false },
       vercelBlob: { configured: storage.configured, connected: storage.connected },
       retention: "PERMANENT UNTIL MANUAL DELETE",
       autoDelete: false
@@ -684,7 +679,8 @@ app.post("/api/shared-access", async (req, res) => {
   const token = String(req.body?.token || "");
   const data = verifyShareToken(token);
   if (!data) return jsonError(res, 410, "Share link expired or invalid.");
-  if (!APP_PASSWORD || !safeEqual(String(req.body?.password || ""), APP_PASSWORD)) return jsonError(res, 403, "Incorrect Enter password.");
+  const configuredLinkPassword = LINK_PASSWORD || APP_PASSWORD;
+  if (!configuredLinkPassword || !safeEqual(String(req.body?.password || ""), configuredLinkPassword)) return jsonError(res, 403, "Incorrect link password.");
   const sharedToken = signPayload({ type: "shared-download", tokenHash: crypto.createHash("sha256").update(token).digest("hex"), exp: Date.now() + 15 * 60 * 1000 });
   const secure = Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
   res.setHeader("Set-Cookie", `cloud_zen_shared_download_access=${encodeURIComponent(sharedToken)}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=900`);
@@ -789,6 +785,8 @@ if (!process.env.VERCEL) {
 }
 
 module.exports = app;
+  
+
   
 
   
