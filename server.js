@@ -18,7 +18,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { Readable } = require("stream");
 const archiver = require("archiver");
-const { put, get, list, del, head, copy, issueSignedToken, presignUrl } = require("@vercel/blob");
+const { put, get, list, del, head, copy } = require("@vercel/blob");
 const { handleUpload } = require("@vercel/blob/client");
 
 const app = express();
@@ -257,37 +257,29 @@ function publicFile(meta) {
 
 async function listAllFiles() {
   const files = [];
-  const seen = new Set();
-  const prefixes = [FILE_PREFIX, LEGACY_FILE_PREFIX];
-
-  for (const prefix of prefixes) {
-    let cursor;
-    do {
-      const result = await list({ prefix, limit: 1000, cursor });
-      for (const blob of result.blobs || []) {
-        if (seen.has(blob.pathname)) continue;
-        const parsed = parseFilePath(blob.pathname);
-        if (!parsed) continue;
-        seen.add(blob.pathname);
-        files.push({
-          name: parsed.name,
-          size: Number(blob.size || 0),
-          sizeText: formatBytes(blob.size),
-          modified: blob.uploadedAt || null,
-          uploadedAt: blob.uploadedAt || null,
-          type: blob.contentType || mimeFor(parsed.name),
-          mime: blob.contentType || mimeFor(parsed.name),
-          pathname: blob.pathname,
-          relativePath: parsed.relativePath,
-          etag: blob.etag,
-          url: blob.url,
-          downloadUrl: blob.downloadUrl
-        });
-      }
-      cursor = result.cursor;
-    } while (cursor);
-  }
-
+  let cursor;
+  do {
+    const result = await list({ prefix: FILE_PREFIX, limit: 1000, cursor });
+    for (const blob of result.blobs || []) {
+      const parsed = parseFilePath(blob.pathname);
+      if (!parsed) continue;
+      files.push({
+        name: parsed.name,
+        size: Number(blob.size || 0),
+        sizeText: formatBytes(blob.size),
+        modified: blob.uploadedAt || null,
+        uploadedAt: blob.uploadedAt || null,
+        type: blob.contentType || mimeFor(parsed.name),
+        mime: blob.contentType || mimeFor(parsed.name),
+        pathname: blob.pathname,
+        relativePath: parsed.relativePath,
+        etag: blob.etag,
+        url: blob.url,
+        downloadUrl: blob.downloadUrl
+      });
+    }
+    cursor = result.cursor;
+  } while (cursor);
   files.sort((a, b) => String(a.name).localeCompare(String(b.name)));
   return files;
 }
@@ -300,8 +292,8 @@ async function findFile(name) {
 
 async function findByPathname(pathname) {
   const safe = String(pathname || "");
-  if (!safe.startsWith(FILE_PREFIX) && !safe.startsWith(LEGACY_FILE_PREFIX)) return null;
-  try { return await head(safe, { access: "private" }); } catch { return null; }
+  if (!safe.startsWith(FILE_PREFIX)) return null;
+  try { return await head(safe); } catch { return null; }
 }
 
 /* =========================
@@ -398,49 +390,6 @@ app.get("/api/files", requireAuth, async (req, res) => {
 /* =========================
    DIRECT VERCEL BLOB CLIENT UPLOAD
 ========================= */
-app.post("/api/blob-upload-url", requireAuth, async (req, res) => {
-  try {
-    const pathname = String(req.body?.pathname || "");
-    const size = Number(req.body?.size);
-    const contentType = String(req.body?.contentType || "application/octet-stream").slice(0, 180);
-
-    if (!pathname.startsWith(FILE_PREFIX)) return jsonError(res, 400, "Invalid upload path");
-    if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_FILE_SIZE) {
-      return jsonError(res, 400, `File size must be between 1 byte and ${formatBytes(MAX_FILE_SIZE)}`);
-    }
-
-    // A short-lived URL is scoped to this exact pathname and PUT operation.
-    // The file bytes go directly from the browser to Vercel Blob, never through
-    // the Vercel Function, so the Function 4.5 MB request limit is avoided.
-    const token = await issueSignedToken({
-      pathname,
-      operations: ["put"],
-      validUntil: Date.now() + 15 * 60 * 1000
-    });
-
-    const signed = await presignUrl(token, {
-      pathname,
-      operation: "put",
-      validUntil: Date.now() + 15 * 60 * 1000
-    });
-
-    res.json({
-      ok: true,
-      pathname,
-      uploadUrl: signed.presignedUrl,
-      expiresAt: Date.now() + 15 * 60 * 1000,
-      contentType
-    });
-  } catch (error) {
-    console.error("BLOB SIGNED UPLOAD ERROR:", error?.stack || error);
-    const message = String(error?.message || error);
-    if (/No blob credentials|credentials found|BLOB_READ_WRITE_TOKEN|oidc|store/i.test(message)) {
-      return jsonError(res, 503, "Vercel Blob is not connected. Connect a PRIVATE Blob store to this Vercel project and redeploy.");
-    }
-    return jsonError(res, 400, message);
-  }
-});
-
 app.post("/api/blob-upload", requireAuth, async (req, res) => {
   try {
     const body = req.body;
@@ -508,4 +457,245 @@ app.delete("/api/upload/:id", requireAuth, async (req, res) => {
   const id = cleanName(req.params.id);
   try {
     const files = await listAllFiles();
-    const matches = files.filte
+    const matches = files.filter(file => parseFilePath(file.pathname)?.id === id);
+    for (const file of matches) await del(file.pathname, { access: "private" });
+    res.json({ ok: true });
+  } catch (error) {
+    return jsonError(res, 400, error?.message || "Cancel failed");
+  }
+});
+
+/* =========================
+   STREAM / DOWNLOAD
+========================= */
+async function streamBlob(req, res, pathname, inline) {
+  const safe = String(pathname || "");
+  if (!safe.startsWith(FILE_PREFIX)) return res.status(404).send("File not found");
+  const range = String(req.headers.range || "").trim();
+  const options = { access: "private" };
+  if (range) options.range = range;
+  const result = await get(safe, options);
+  if (!result || !result.stream || ![200, 206].includes(Number(result.statusCode))) return res.status(404).send("File not found");
+  const blob = result.blob || {};
+  res.status(Number(result.statusCode));
+  res.setHeader("Content-Type", blob.contentType || "application/octet-stream");
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  if (blob.etag) res.setHeader("ETag", blob.etag);
+  const contentRange = result.headers?.get?.("content-range");
+  const contentLength = result.headers?.get?.("content-length");
+  if (contentRange) res.setHeader("Content-Range", contentRange);
+  if (contentLength) res.setHeader("Content-Length", contentLength);
+  const parsed = parseFilePath(safe);
+  if (inline) {
+    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(parsed?.name || "file")}`);
+  } else {
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(parsed?.name || "file")}`);
+  }
+  Readable.fromWeb(result.stream).pipe(res);
+}
+
+app.get(/^\/api\/stream\/(.+)$/, requireAuth, async (req, res) => {
+  try {
+    const name = decodeURIComponent(req.params[0]);
+    const file = await findFile(name);
+    if (!file) return res.status(404).send("File not found");
+    await streamBlob(req, res, file.pathname, true);
+  } catch (error) {
+    if (!res.headersSent) res.status(404).send("File not found"); else res.destroy(error);
+  }
+});
+
+app.get(/^\/api\/download\/(.+)$/, requireAuth, async (req, res) => {
+  try {
+    const name = decodeURIComponent(req.params[0]);
+    const file = await findFile(name);
+    if (!file) return res.status(404).send("File not found");
+    await streamBlob(req, res, file.pathname, false);
+  } catch (error) {
+    if (!res.headersSent) res.status(404).send("Download failed"); else res.destroy(error);
+  }
+});
+
+/* Query-style compatibility routes for the newer client build. */
+app.get("/api/stream", requireAuth, async (req, res) => {
+  try {
+    const pathname = String(req.query.pathname || "");
+    const blob = await findByPathname(pathname);
+    if (!blob) return res.status(404).send("File not found");
+    await streamBlob(req, res, pathname, true);
+  } catch (error) {
+    if (!res.headersSent) res.status(404).send("File not found"); else res.destroy(error);
+  }
+});
+
+app.get("/api/download", requireAuth, async (req, res) => {
+  try {
+    const pathname = String(req.query.pathname || "");
+    const blob = await findByPathname(pathname);
+    if (!blob) return res.status(404).send("File not found");
+    await streamBlob(req, res, pathname, false);
+  } catch (error) {
+    if (!res.headersSent) res.status(404).send("Download failed"); else res.destroy(error);
+  }
+});
+
+/* =========================
+   RENAME
+========================= */
+app.patch("/api/files", requireAuth, async (req, res) => {
+  try {
+    const oldName = cleanName(req.body?.name || "");
+    const newName = cleanName(req.body?.newName || "");
+    if (!oldName || !newName || oldName === newName) return jsonError(res, 400, "Enter a different file name.");
+    const file = await findFile(oldName);
+    if (!file) return jsonError(res, 404, "File not found");
+    const duplicate = await findFile(newName);
+    if (duplicate) return jsonError(res, 409, "A file with that name already exists.");
+    const parsed = parseFilePath(file.pathname);
+    const newPath = makePath(parsed?.id || crypto.randomUUID(), parsed?.relativePath || "", newName);
+    await copy(file.pathname, newPath, { access: "private", addRandomSuffix: false });
+    await del(file.pathname, { access: "private" });
+    res.json({ ok: true, file: publicFile({ ...file, name: newName, pathname: newPath, type: mimeFor(newName), modified: new Date().toISOString() }) });
+  } catch (error) {
+    console.error("RENAME ERROR:", error?.stack || error);
+    return jsonError(res, 500, error?.message || "Rename failed");
+  }
+});
+
+/* =========================
+   SHARE
+========================= */
+function createShareToken(name) {
+  const exp = Math.floor(Date.now() / 1000) + SHARE_TTL_SECONDS;
+  return signPayload({ type: "share", n: cleanName(name), exp, nonce: crypto.randomBytes(8).toString("hex") });
+}
+
+app.post("/api/share", requireAuth, async (req, res) => {
+  try {
+    const name = cleanName(req.body?.name || "");
+    const file = await findFile(name);
+    if (!file) return jsonError(res, 404, "File not found");
+    const token = createShareToken(name);
+    const base = `${req.protocol}://${req.get("host")}`;
+    res.json({ ok: true, url: `${base}/s/${encodeURIComponent(token)}`, expiresIn: SHARE_TTL_SECONDS, name: file.name });
+  } catch (error) {
+    return jsonError(res, 500, error?.message || "Could not create share link");
+  }
+});
+
+function verifyShareToken(token) {
+  const data = verifyPayload(token);
+  return data?.type === "share" ? data : null;
+}
+
+app.post("/api/shared-access", async (req, res) => {
+  const token = String(req.body?.token || "");
+  const data = verifyShareToken(token);
+  if (!data) return jsonError(res, 410, "Share link expired or invalid.");
+  if (!APP_PASSWORD || !safeEqual(String(req.body?.password || ""), APP_PASSWORD)) return jsonError(res, 403, "Incorrect Enter password.");
+  const sharedToken = signPayload({ type: "shared-download", tokenHash: crypto.createHash("sha256").update(token).digest("hex"), exp: Date.now() + 15 * 60 * 1000 });
+  const secure = Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
+  res.setHeader("Set-Cookie", `cloud_zen_shared_download_access=${encodeURIComponent(sharedToken)}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=900`);
+  res.json({ ok: true, expiresIn: 900 });
+});
+
+app.get(/^\/api\/shared-stream\/(.+)$/, async (req, res) => {
+  try {
+    const token = decodeURIComponent(req.params[0]);
+    const data = verifyShareToken(token);
+    if (!data) return res.status(410).send("Share link expired");
+    const file = await findFile(data.n);
+    if (!file) return res.status(404).send("File not found");
+    await streamBlob(req, res, file.pathname, true);
+  } catch (error) {
+    if (!res.headersSent) res.status(404).send("File not found"); else res.destroy(error);
+  }
+});
+
+app.get(/^\/s\/([^/]+)$/, async (req, res) => {
+  const token = decodeURIComponent(req.params[0]);
+  const data = verifyShareToken(token);
+  if (!data) return res.status(404).send("This share link has expired or is invalid.");
+  const file = await findFile(data.n);
+  if (!file) return res.status(404).send("File not found");
+  const safeName = file.name.replace(/[<>]/g, "");
+  const streamUrl = `/api/shared-stream/${encodeURIComponent(token)}`;
+  const downloadUrl = `/s/${encodeURIComponent(token)}/download`;
+  const mime = file.type || mimeFor(file.name);
+  const escaped = JSON.stringify({ name: safeName, size: file.size, type: mime, streamUrl, downloadUrl, token }).replace(/</g, "\\u003c");
+  res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070b14"><title>${safeName}</title><style>body{margin:0;background:#070b14;color:#eef2ff;font-family:system-ui;display:grid;place-items:center;min-height:100vh;padding:24px;box-sizing:border-box}.card{width:min(920px,100%);padding:28px;border:1px solid #ffffff18;border-radius:28px;background:#ffffff08;backdrop-filter:blur(18px)}h1{font-size:clamp(20px,4vw,34px);margin:0 0 8px;word-break:break-word}.meta{color:#9aa7bf;margin-bottom:22px}video,audio,img,iframe{width:100%;max-height:70vh;border-radius:18px;background:#000;object-fit:contain}.btn{display:inline-flex;margin-top:18px;padding:12px 16px;border-radius:12px;background:#fff;color:#07101e;text-decoration:none;font-weight:750;border:0;cursor:pointer}.shade{position:fixed;inset:0;background:#0009;backdrop-filter:blur(10px);display:none;place-items:center;padding:18px}.box{width:min(420px,100%);background:#101a2b;border:1px solid #ffffff18;border-radius:22px;padding:24px}.box input{width:100%;height:46px;box-sizing:border-box;border-radius:12px;border:1px solid #ffffff18;background:#091321;color:#fff;padding:0 12px;margin:8px 0 12px}.err{color:#ffb5c0;font-size:12px;min-height:18px}</style></head><body><main class="card"><h1>${safeName}</h1><div class="meta">${formatBytes(file.size)} · ${mime}</div><div id="viewer"></div><button class="btn" id="downloadBtn">Download file</button></main><div class="shade" id="shade"><div class="box"><h2>Secure download</h2><p>Enter the website password to continue.</p><input id="pw" type="password" autocomplete="off" placeholder="Password"><div class="err" id="err"></div><button class="btn" id="unlock">Unlock & download</button></div></div><script>const f=${escaped},v=document.getElementById('viewer'),u=f.streamUrl;if(f.type.startsWith('image/'))v.innerHTML='<img src="'+u+'">';else if(f.type.startsWith('video/'))v.innerHTML='<video src="'+u+'" controls playsinline preload="metadata"></video>';else if(f.type.startsWith('audio/'))v.innerHTML='<audio src="'+u+'" controls preload="metadata"></audio>';else if(f.type==='application/pdf'||f.type.startsWith('text/'))v.innerHTML='<iframe src="'+u+'" style="height:70vh"></iframe>';else v.innerHTML='<p style="color:#9aa7bf">Preview is not available for this file type.</p>';const sh=document.getElementById('shade');document.getElementById('downloadBtn').onclick=()=>sh.style.display='grid';document.getElementById('unlock').onclick=async()=>{const err=document.getElementById('err'),b=document.getElementById('unlock');b.disabled=true;err.textContent='';try{const r=await fetch('/api/shared-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:f.token,password:document.getElementById('pw').value})});const d=await r.json();if(!r.ok)throw Error(d.error||'Access denied');location.href=f.downloadUrl}catch(e){err.textContent=e.message;b.disabled=false}};</script></body></html>`);
+});
+
+app.get(/^\/s\/([^/]+)\/download$/, async (req, res) => {
+  const token = decodeURIComponent(req.params[0]);
+  const data = verifyShareToken(token);
+  if (!data) return res.status(410).send("Share link expired");
+  const file = await findFile(data.n);
+  if (!file) return res.status(404).send("File not found");
+  // Share download is intentionally protected by the website password through
+  // a short-lived cookie in the original UI. For compatibility, accept the
+  // main authenticated session as well as the short-lived shared session.
+  const shared = verifyPayload(getCookie(req, "cloud_zen_shared_download_access"));
+  const validShared = Boolean(shared && shared.type === "shared-download" && shared.tokenHash === crypto.createHash("sha256").update(token).digest("hex"));
+  if (!getSession(req) && !validShared) return res.status(403).send("Download access requires the website password.");
+  await streamBlob(req, res, file.pathname, false);
+});
+
+/* =========================
+   DELETE — MANUAL ONLY
+========================= */
+app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) => {
+  try {
+    const name = cleanName(req.body?.name || "");
+    const file = await findFile(name);
+    if (!file) return jsonError(res, 404, "File not found");
+    await del(file.pathname, { access: "private" });
+    res.json({ ok: true, name, message: "File permanently deleted", autoDelete: false });
+  } catch (error) {
+    console.error("DELETE ERROR:", error?.stack || error);
+    return jsonError(res, 500, error?.message || "Delete failed");
+  }
+});
+
+/* =========================
+   DOWNLOAD ALL
+========================= */
+app.get("/api/download-all", requireAuth, async (req, res) => {
+  let archive;
+  try {
+    const files = await listAllFiles();
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", "attachment; filename*=UTF-8''my-personal-cloud-all-files.zip");
+    res.setHeader("Cache-Control", "private, no-store");
+    archive = archiver("zip", { zlib: { level: 0 } });
+    archive.on("error", error => { if (!res.destroyed) res.destroy(error); });
+    archive.pipe(res);
+    for (const file of files) {
+      if (res.destroyed) break;
+      const result = await get(file.pathname, { access: "private" });
+      if (!result?.stream) throw new Error(`Could not read ${file.name}`);
+      archive.append(Readable.fromWeb(result.stream), { name: file.name });
+    }
+    await archive.finalize();
+  } catch (error) {
+    if (archive) { try { archive.abort(); } catch {} }
+    if (!res.headersSent) res.status(500).json({ error: error?.message || "Could not create archive" });
+    else res.destroy(error);
+  }
+});
+
+app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
+
+app.use((err, req, res, next) => {
+  console.error("UNHANDLED ERROR:", err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: "Internal server error" });
+});
+
+if (!process.env.VERCEL) {
+  app.listen(PORT, HOST, () => console.log(`[my-personal-cloud] Server running on ${HOST}:${PORT}`));
+}
+
+module.exports = app;
