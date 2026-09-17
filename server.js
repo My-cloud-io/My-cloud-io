@@ -67,9 +67,27 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 /* =========================
    ENVIRONMENT / SECRETS
 ========================= */
-const APP_PASSWORD = String(process.env.APP_PASSWORD ?? "").trim();
-const DELETE_PASSWORD = String(process.env.DELETE_PASSWORD ?? "").trim();
-const LINK_PASSWORD = String(process.env.LINK_PASSWORD ?? "").trim();
+function readSecret(name, aliases = []) {
+  const names = [name, ...aliases];
+  for (const key of names) {
+    if (process.env[key] !== undefined && process.env[key] !== null) {
+      const value = String(process.env[key]);
+      // Vercel Environment Variables are normally stored without quotes,
+      // but tolerate one accidental pair of matching outer quotes.
+      if (value.length >= 2 &&
+          ((value.startsWith("\"") && value.endsWith("\"")) ||
+           (value.startsWith("'") && value.endsWith("'")))) {
+        return value.slice(1, -1);
+      }
+      return value;
+    }
+  }
+  return "";
+}
+
+const APP_PASSWORD = readSecret("APP_PASSWORD", ["APP_PASS", "CLOUD_PASSWORD"]).trim();
+const DELETE_PASSWORD = readSecret("DELETE_PASSWORD", ["DELETE_PASS"]);
+const LINK_PASSWORD = readSecret("LINK_PASSWORD", ["SHARE_PASSWORD"]);
 const SESSION_SECRET = String(process.env.SESSION_SECRET ?? "").trim() || crypto.createHash("sha256").update(`my-personal-cloud-session|${APP_PASSWORD}`).digest("hex");
 const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 1024 * 1024 * 1024 * 1024);
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -344,18 +362,42 @@ async function findByPathname(pathname) {
    AUTH
 ========================= */
 app.post("/api/auth/login", (req, res) => {
-  if (isLocked(req, "login")) return jsonError(res, 423, "Access locked for 24 hours on this device.");
-  if (!APP_PASSWORD) return jsonError(res, 500, "APP_PASSWORD is not configured in Vercel.");
-  const password = String(req.body?.password || "");
-  if (!safeEqual(password, APP_PASSWORD)) {
-    const locked = registerFailure(req, "login");
-    return jsonError(res, locked ? 423 : 401, locked ? "Access locked for 24 hours." : "Incorrect password");
+  try {
+    if (!APP_PASSWORD) return jsonError(res, 500, "APP_PASSWORD is not configured in Vercel.");
+
+    // Accept JSON, form submissions, and raw text. The native HTML form is
+    // an intentional fallback so login still works even if another frontend
+    // script fails to initialize.
+    let password = "";
+    if (typeof req.body === "string") {
+      password = req.body;
+    } else if (Buffer.isBuffer(req.body)) {
+      password = req.body.toString("utf8");
+    } else {
+      password = String(req.body?.password ?? "");
+    }
+
+    if (!safeEqual(password, APP_PASSWORD)) {
+      const locked = registerFailure(req, "login");
+      return jsonError(res, locked ? 423 : 401, locked ? "Access locked for 24 hours." : "Incorrect password");
+    }
+
+    // A correct password is always allowed. A previous failed-attempt lock
+    // must never block the owner who now supplies the correct password.
+    clearFailures(req, "login");
+
+    const secure = Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
+    const token = encodeURIComponent(makeSession());
+    res.setHeader("Set-Cookie", `cloud_zen_session=${token}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
+
+    const acceptsHtml = /text\/html/i.test(String(req.headers.accept || "")) && !/application\/json/i.test(String(req.headers.accept || ""));
+    if (acceptsHtml) return res.redirect(303, "/");
+
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("AUTH LOGIN ERROR:", error?.stack || error);
+    return jsonError(res, 500, "Unable to verify password. Please try again.");
   }
-  clearFailures(req, "login");
-  const secure = Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
-  const token = encodeURIComponent(makeSession());
-  res.setHeader("Set-Cookie", `cloud_zen_session=${token}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
-  res.json({ ok: true });
 });
 
 app.get("/api/auth/me", (req, res) => res.json({ authenticated: Boolean(getSession(req)) }));
@@ -785,9 +827,4 @@ if (!process.env.VERCEL) {
 }
 
 module.exports = app;
-  
-
-
-  
-
   
