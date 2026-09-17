@@ -1,34 +1,29 @@
-My-cloud-io — Minimal Vercel Final
-Exactly the requested project files are used:
-public/index.html
-server.js
+My Personal Cloud / Cloud-Zen — Vercel Final 7.0.0
+This build keeps the original index.html UI and its existing file-management API contract, while replacing the Telegram MTProto file-storage path with Vercel Blob Private Storage.
+Project files
+public/index.html — original mobile-first UI, tabs, search, sort, viewer, QR, upload queue, drag/drop, file list and existing controls.
+server.js — Express backend with the original authentication/file routes and Vercel Blob storage implementation.
 package.json
-telegram-session.js
-README.md
-The app uses Vercel Blob Private Storage as the real durable storage backend. telegram-session.js is retained only for the requested project structure and is not used for file storage. This avoids the AUTH_KEY_DUPLICATED problem caused by sharing one Telegram MTProto session across concurrent Vercel instances.
-Vercel setup
-Import this project into Vercel.
-In Storage, create a Private Blob store and connect it to this project. Vercel supplies BLOB_READ_WRITE_TOKEN (or OIDC-backed Blob authentication for supported connected stores).
-Add these Environment Variables:
+telegram-session.js — retained for compatibility with the original project layout; it is NOT used as the production storage backend.
+Vercel setup — required once
+Open the Vercel project.
+Open Storage.
+Select Create Database → Blob.
+Choose Private.
+Connect the Blob store to this project.
+Enable the Production environment.
+Redeploy the project.
+Vercel's Blob client-upload flow sends large files directly from the browser to Blob, avoiding the 4.5 MB Vercel Function request-body limit. Multipart uploads are enabled in the browser code.
+Required environment variables
 APP_PASSWORD=your-login-password
 DELETE_PASSWORD=your-delete-password
-SESSION_SECRET=use-a-long-random-secret
-NODE_ENV=production
-MAX_FILE_SIZE=1099511627776
-Deploy.
-Open the live URL and use the APP_PASSWORD.
-Real features
-Upload
-Download
-Video/image/audio streaming
-Delete with DELETE_PASSWORD
-Rename
-File listing
-Folder/relative-path preservation from folder selection
-Download All
-Share link endpoint
-Durable completed files
-No automatic deletion of completed files
-Uploads are sent as 4 MiB requests to stay below Vercel Function request-body limits. Each chunk is immediately stored in Blob. A completed file is considered complete only after all chunks exist and the recorded size matches.
+SESSION_SECRET=long-random-secret
+BLOB_READ_WRITE_TOKEN is normally added by Vercel when the Blob store is connected. New Vercel projects can also use Vercel's OIDC-based Blob authentication.
+Storage behavior
+Completed files are stored in Vercel Blob Private Storage.
+The application has no automatic age-based deletion.
+Completed files are deleted only through the explicit Delete route.
+Telegram MTProto is not used for production storage, so the old shared-session AUTH_KEY_DUPLICATED architecture is removed from the active storage path.
+Maximum file size defaults to 1 TB and can be changed with MAX_FILE_SIZE.
 Important
-Vercel deployment can remain available continuously, but no hosting platform can guarantee zero downtime. Also, Vercel Function execution limits still apply to individual requests. Vercel Blob is the durable storage layer, so files do not depend on the ephemeral server filesystem.
+If the Vercel Blob store is not connected, uploads cannot work because there is no storage credential available to the backend. The website now reports that condition clearly instead of failing with req.arrayBuffer() or a generic upload error.
