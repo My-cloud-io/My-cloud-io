@@ -7321,6 +7321,90 @@ function uploadToSignedUrl(
 }
 
 
+async function uploadSmallFallback(
+    pathname,
+    file,
+    queue
+){
+    if(file.size > 4 * 1024 * 1024){
+        throw new Error(
+            "Secure direct upload URL could not be created for this large file. Please verify the Vercel Blob store connection and redeploy."
+        );
+    }
+
+    updateQueue(
+        queue,
+        0,
+        false,
+        0,
+        file.size
+    );
+
+    const xhr =
+        new XMLHttpRequest();
+
+    await new Promise((resolve,reject) => {
+        xhr.open(
+            "POST",
+            "/api/upload-small",
+            true
+        );
+        xhr.withCredentials = true;
+        xhr.setRequestHeader(
+            "Content-Type",
+            "application/octet-stream"
+        );
+        xhr.setRequestHeader(
+            "X-Upload-Pathname",
+            pathname
+        );
+        xhr.setRequestHeader(
+            "X-Upload-Size",
+            String(file.size)
+        );
+        xhr.setRequestHeader(
+            "X-Upload-Content-Type",
+            file.type || "application/octet-stream"
+        );
+
+        xhr.upload.onprogress = event => {
+            const loaded = Number(event.loaded || 0);
+            const total = Number(event.total || file.size) || file.size;
+            const percent = total > 0 ? Math.min(100, (loaded / total) * 100) : 0;
+            updateQueue(
+                queue,
+                percent,
+                false,
+                loaded,
+                file.size
+            );
+        };
+
+        xhr.onload = () => {
+            if(xhr.status >= 200 && xhr.status < 300){
+                resolve();
+                return;
+            }
+            let message = "Upload failed.";
+            try{
+                const data = JSON.parse(xhr.responseText || "{}");
+                message = data.error || message;
+            }catch(_){}
+            reject(new Error(message));
+        };
+
+        xhr.onerror = () => reject(new Error("Network error while uploading."));
+        xhr.onabort = () => reject(new Error("Upload was cancelled."));
+
+        try{
+            xhr.send(file);
+        }catch(error){
+            reject(error);
+        }
+    });
+}
+
+
 async function uploadFile(
     file
 ){
@@ -7403,19 +7487,40 @@ async function uploadFile(
 
     try{
 
-        const signed =
-            await requestSignedBlobUpload(
-                pathname,
-                file.size,
-                file.type ||
-                    "application/octet-stream"
+        let uploadedDirectly = false;
+
+        try{
+            const signed =
+                await requestSignedBlobUpload(
+                    pathname,
+                    file.size,
+                    file.type ||
+                        "application/octet-stream"
+                );
+
+            await uploadToSignedUrl(
+                signed.uploadUrl,
+                file,
+                queue
             );
 
-        await uploadToSignedUrl(
-            signed.uploadUrl,
-            file,
-            queue
-        );
+            uploadedDirectly = true;
+        }catch(signedError){
+            console.warn(
+                "SIGNED BLOB UPLOAD FAILED; USING SMALL-FILE FALLBACK WHEN POSSIBLE:",
+                signedError
+            );
+
+            if(file.size > 4 * 1024 * 1024){
+                throw signedError;
+            }
+
+            await uploadSmallFallback(
+                pathname,
+                file,
+                queue
+            );
+        }
 
         /*
           Verify the completed Blob from the server before the UI says that
@@ -7884,201 +7989,5 @@ async function refreshAll(){
     }finally{
 
         setTimeout(
-            () => {
-
-                buttons.forEach(
-                    button =>
-                        button.classList.remove(
-                            "spinning"
-                        )
-                );
-
-            },
-            650
-        );
-    }
-}
-
-
-document
-    .getElementById(
-        "refreshButton"
-    )
-    .addEventListener(
-        "click",
-        refreshAll
-    );
-
-
-document
-    .getElementById(
-        "topRefresh"
-    )
-    .addEventListener(
-        "click",
-        refreshAll
-    );
-
-
-/* =========================================================
-   QR
-========================================================= */
-
-function openQRCode(){
-
-    qrCode.innerHTML =
-        "";
-
-
-    if(
-        typeof QRCode ===
-        "undefined"
-    ){
-
-        qrCode.textContent =
-            "QR unavailable";
-
-
-        showToast(
-            "QR code library unavailable"
-        );
-
-
-        qrModal.classList.add(
-            "show"
-        );
-
-
-        return;
-    }
-
-
-    const websiteURL =
-        window.location.href;
-
-
-    new QRCode(
-        qrCode,
-        {
-
-            text:
-                websiteURL,
-
-            width:
-                164,
-
-            height:
-                164,
-
-            colorDark:
-                "#07111f",
-
-            colorLight:
-                "#ffffff",
-
-            correctLevel:
-                QRCode.CorrectLevel.M
-        }
-    );
-
-
-    qrModal.classList.add(
-        "show"
-    );
-}
-
-
-function closeQRCode(){
-
-    qrModal.classList.remove(
-        "show"
-    );
-
-    qrCode.innerHTML =
-        "";
-}
-
-
-qrButton.addEventListener(
-    "click",
-    openQRCode
-);
-
-
-qrClose.addEventListener(
-    "click",
-    closeQRCode
-);
-
-
-qrModal.addEventListener(
-    "click",
-    event => {
-
-        if(
-            event.target ===
-            qrModal
-        ){
-
-            closeQRCode();
-        }
-    }
-);
-
-
-/* =========================================================
-   LOAD EVERYTHING
-========================================================= */
-
-async function loadEverything(){
-
-    try{
-
-        await Promise.all([
-            loadStorage(),
-            loadFiles()
-        ]);
-
-    }catch(error){
-
-        console.error(
-            error
-        );
-    }
-}
-
-
-/* =========================================================
-   FORMAT BYTES
-========================================================= */
-
-function formatBytes(
-    bytes
-){
-
-    const value =
-        Number(bytes);
-
-
-    if(
-        !Number.isFinite(value) ||
-        value <= 0
-    ){
-
-        return "0 B";
-    }
-
-
-    const units = [
-        "B",
-        "KB",
-        "MB",
-        "GB",
-        "TB"
-    ];
-
-
-    const index =
-        Math.min(
-            Math.f
+        
 Preview truncated for large file
