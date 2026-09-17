@@ -4763,11 +4763,20 @@ async function login(){
 
     try{
 
+        /*
+           Authenticate first. Only a successful response from the
+           existing /api/auth/login endpoint unlocks the cloud.
+           The dashboard data loading below is deliberately separated
+           so a storage/list API delay can never make a correct password
+           look like a failed login.
+        */
         await authApi(
             "/api/auth/login",
             {
 
                 method:"POST",
+
+                cache:"no-store",
 
                 headers:{
                     "Content-Type":
@@ -4786,39 +4795,62 @@ async function login(){
             "";
 
 
+        /* Login succeeded: enter the cloud immediately. */
         hideLogin();
 
         dashboard.classList.add(
             "show"
         );
 
+        loginError.textContent =
+            "";
 
-        if(
-            typeof loadEverything ===
-            "function"
-        ){
 
-            await loadEverything();
+        /*
+           Loading the cloud contents must not be part of password
+           validation. If a secondary API is temporarily unavailable,
+           the authenticated dashboard still remains open.
+        */
+        try{
 
-        }else if(
-            typeof initApp ===
-            "function"
-        ){
+            if(
+                typeof loadEverything ===
+                "function"
+            ){
 
-            await initApp();
+                await loadEverything();
 
-        }else if(
-            typeof startApp ===
-            "function"
-        ){
+            }else if(
+                typeof initApp ===
+                "function"
+            ){
 
-            await startApp();
+                await initApp();
+
+            }else if(
+                typeof startApp ===
+                "function"
+            ){
+
+                await startApp();
+            }
+
+        }catch(loadError){
+
+            console.error(
+                "Cloud data loading after login failed:",
+                loadError
+            );
         }
 
     }catch(error){
 
+        /* The login error is shown only when /api/auth/login itself fails. */
         loginError.textContent =
-            error.message;
+            error?.message ||
+            "Unable to verify password. Please try again.";
+
+        password.focus();
 
     }finally{
 
@@ -7904,68 +7936,5 @@ document
 
 document
     .getElementById(
-        "gridView"
-    )
-    .addEventListener(
-        "click",
-        () => {
-
-            currentView =
-                "grid";
-
-
-            fileList.classList.remove(
-                "listView"
-            );
-
-
-            document
-                .getElementById(
-                    "gridView"
-                )
-                .classList.add(
-                    "active"
-                );
-
-
-            document
-                .getElementById(
-                    "listView"
-                )
-                .classList.remove(
-                    "active"
-                );
-
-
-            localStorage.setItem(
-                VIEW_KEY,
-                "grid"
-            );
-        }
-    );
-
-
-document
-    .getElementById(
-        "listView"
-    )
-    .addEventListener(
-        "click",
-        () => {
-
-            currentView =
-                "list";
-
-
-            fileList.classList.add(
-                "listView"
-            );
-
-
-            document
-                .getElementById(
-                    "listView"
-                )
-                .classList.add(
-                    "acti
+   
 Preview truncated for large file
