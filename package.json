@@ -1,19 +1,22 @@
 {
-  "name": "my-cloud-io",
-  "version": "5.1.0",
+  "name": "cloud-zen-vercel",
+  "version": "7.1.0",
   "private": true,
-  "description": "My-cloud-io private Vercel cloud storage with direct Vercel Blob uploads",
+  "description": "My Personal Cloud / Cloud-Zen \u2014 original mobile UI with Vercel Blob Private Storage",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "telegram:session": "node telegram-session.js",
     "healthcheck": "node --check server.js"
   },
   "engines": {
     "node": "24.x"
   },
   "dependencies": {
-    "@vercel/blob": "^2.4.0",
+    "@vercel/blob": "^2.6.1",
     "archiver": "^7.0.1",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "teleproto": "^1.229.0"
   }
 }
+
