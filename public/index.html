@@ -3373,6 +3373,8 @@ input[type="password"]::placeholder{
         <section
             id="storageDetailsCard"
             class="storageDetailsCard"
+            aria-hidden="true"
+            style="display:none !important;"
         >
 
             <div class="storageDetailsHead">
@@ -5090,29 +5092,7 @@ function formatClientBytes(bytes){
 
 
 
-/* =========================================================
-   STORAGE ACCORDION — COLLAPSE LONG PROVIDER LIST
-========================================================= */
-(function initStorageAccordion(){
-    const detailsCard = document.getElementById("storageDetailsCard");
-    const head = detailsCard?.querySelector(".storageDetailsHead");
-    if(!detailsCard || !head) return;
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "storageAccordionButton";
-    button.innerHTML = `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`;
-
-    button.addEventListener("click", () => {
-        const collapsed = detailsCard.classList.toggle("storageCompact");
-        button.innerHTML = collapsed
-            ? `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`
-            : `Hide <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌃</span>`;
-    });
-
-    head.appendChild(button);
-    detailsCard.classList.add("storageCompact");
-})();
+/* Connected cloud/provider accordion removed — Vercel Blob is the active storage. */
 
 storageDetailsRefresh?.addEventListener(
     "click",
@@ -5970,7 +5950,6 @@ function createFileCard(
     rename.textContent =
         "Rename";
 
-
     rename.addEventListener(
         "click",
         () => {
@@ -6064,8 +6043,8 @@ function createFileCard(
     actions.append(
         open,
         download,
-        rename,
         share,
+        rename,
         more
     );
 
@@ -6202,6 +6181,101 @@ function rememberRecent(
         RECENT_KEY,
         recent
     );
+}
+
+
+/* =========================================================
+   RENAME — REAL VERCEL BLOB RENAME
+========================================================= */
+
+async function renameFile(
+    name
+){
+
+    const currentName =
+        String(name || "").trim();
+
+    if(!currentName){
+        return;
+    }
+
+    const suggested =
+        currentName;
+
+    const newName =
+        window.prompt(
+            `Rename "${currentName}" to:`,
+            suggested
+        );
+
+    if(newName === null){
+        return;
+    }
+
+    const cleaned =
+        newName.trim();
+
+    if(!cleaned || cleaned === currentName){
+        return;
+    }
+
+    try{
+
+        await api(
+            "/api/files",
+            {
+
+                method:"PATCH",
+
+                headers:{
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify({
+                        name:currentName,
+                        newName:cleaned
+                    })
+            }
+        );
+
+        // Keep local UI state consistent with the real storage rename.
+        if(starred.has(currentName)){
+            starred.delete(currentName);
+            starred.add(cleaned);
+            writeJSON(
+                STAR_KEY,
+                [...starred]
+            );
+        }
+
+        recent =
+            recent.map(
+                item =>
+                    item === currentName
+                        ? cleaned
+                        : item
+            );
+
+        writeJSON(
+            RECENT_KEY,
+            recent
+        );
+
+        showToast(
+            "File renamed"
+        );
+
+        await loadEverything();
+
+    }catch(error){
+
+        alert(
+            error.message ||
+            "Rename failed"
+        );
+    }
 }
 
 
@@ -6703,121 +6777,6 @@ function closeViewer(){
 
 
 /* =========================================================
-   REAL RENAME — VERCEL BLOB
-========================================================= */
-
-async function renameFile(
-    name
-){
-
-    const currentName =
-        String(name || "").trim();
-
-    if(!currentName){
-        return;
-    }
-
-
-    const newName =
-        window.prompt(
-            `Rename "${currentName}" to:`,
-            currentName
-        );
-
-
-    if(newName === null){
-        return;
-    }
-
-
-    const trimmedName =
-        String(newName).trim();
-
-
-    if(!trimmedName){
-        alert(
-            "A new file name is required."
-        );
-        return;
-    }
-
-
-    if(trimmedName === currentName){
-        return;
-    }
-
-
-    try{
-
-        await api(
-            "/api/files",
-            {
-
-                method:"PATCH",
-
-                headers:{
-                    "Content-Type":
-                        "application/json"
-                },
-
-                body:
-                    JSON.stringify({
-                        name:currentName,
-                        newName:trimmedName
-                    })
-            }
-        );
-
-
-        starred =
-            new Set(
-                [...starred].map(
-                    item =>
-                        item === currentName
-                            ? trimmedName
-                            : item
-                )
-            );
-
-
-        writeJSON(
-            STAR_KEY,
-            [...starred]
-        );
-
-
-        recent =
-            recent.map(
-                item =>
-                    item === currentName
-                        ? trimmedName
-                        : item
-            );
-
-
-        writeJSON(
-            RECENT_KEY,
-            recent
-        );
-
-
-        showToast(
-            `Renamed to ${trimmedName}`
-        );
-
-
-        await loadEverything();
-
-    }catch(error){
-
-        alert(
-            error.message
-        );
-    }
-}
-
-
-/* =========================================================
    DELETE
 ========================================================= */
 
@@ -6836,26 +6795,23 @@ async function deleteFile(
     }
 
 
-    const deletePassword =
-        window.prompt(
-            `Enter Delete Password to permanently delete "${name}"`
-        );
-
-
-    if(deletePassword === null){
-        return;
-    }
-
-
-    if(!String(deletePassword).trim()){
-        alert(
-            "Delete Password is required."
-        );
-        return;
-    }
-
-
     try{
+
+        const deletePassword =
+            window.prompt(
+                "Enter your delete password to permanently delete this file:"
+            );
+
+        if(deletePassword === null){
+            return;
+        }
+
+        if(!deletePassword){
+            alert(
+                "Delete password is required."
+            );
+            return;
+        }
 
         await api(
             "/api/files",
@@ -7087,11 +7043,8 @@ async function requestSignedBlobUpload(
             {
                 method:"POST",
                 credentials:"same-origin",
-                cache:"no-store",
                 headers:{
-                    "Content-Type":"application/json",
-                    "Cache-Control":"no-cache",
-                    "X-Cloud-Upload-Mode":"signed-put-v3"
+                    "Content-Type":"application/json"
                 },
                 body:JSON.stringify({
                     pathname,
@@ -7124,14 +7077,8 @@ async function requestSignedBlobUpload(
         !response.ok ||
         !data?.uploadUrl
     ){
-        const serverError =
-            String(
-                data?.error ||
-                ""
-            );
-
         throw new Error(
-            serverError ||
+            data?.error ||
             "Could not create a secure Vercel Blob upload URL."
         );
     }
@@ -7312,90 +7259,6 @@ function uploadToSignedUrl(
 }
 
 
-async function uploadSmallFallback(
-    pathname,
-    file,
-    queue
-){
-    if(file.size > 4 * 1024 * 1024){
-        throw new Error(
-            "Secure direct upload URL could not be created for this large file. Please verify the Vercel Blob store connection and redeploy."
-        );
-    }
-
-    updateQueue(
-        queue,
-        0,
-        false,
-        0,
-        file.size
-    );
-
-    const xhr =
-        new XMLHttpRequest();
-
-    await new Promise((resolve,reject) => {
-        xhr.open(
-            "POST",
-            "/api/upload-small",
-            true
-        );
-        xhr.withCredentials = true;
-        xhr.setRequestHeader(
-            "Content-Type",
-            "application/octet-stream"
-        );
-        xhr.setRequestHeader(
-            "X-Upload-Pathname",
-            pathname
-        );
-        xhr.setRequestHeader(
-            "X-Upload-Size",
-            String(file.size)
-        );
-        xhr.setRequestHeader(
-            "X-Upload-Content-Type",
-            file.type || "application/octet-stream"
-        );
-
-        xhr.upload.onprogress = event => {
-            const loaded = Number(event.loaded || 0);
-            const total = Number(event.total || file.size) || file.size;
-            const percent = total > 0 ? Math.min(100, (loaded / total) * 100) : 0;
-            updateQueue(
-                queue,
-                percent,
-                false,
-                loaded,
-                file.size
-            );
-        };
-
-        xhr.onload = () => {
-            if(xhr.status >= 200 && xhr.status < 300){
-                resolve();
-                return;
-            }
-            let message = "Upload failed.";
-            try{
-                const data = JSON.parse(xhr.responseText || "{}");
-                message = data.error || message;
-            }catch(_){}
-            reject(new Error(message));
-        };
-
-        xhr.onerror = () => reject(new Error("Network error while uploading."));
-        xhr.onabort = () => reject(new Error("Upload was cancelled."));
-
-        try{
-            xhr.send(file);
-        }catch(error){
-            reject(error);
-        }
-    });
-}
-
-
 async function uploadFile(
     file
 ){
@@ -7478,40 +7341,19 @@ async function uploadFile(
 
     try{
 
-        let uploadedDirectly = false;
-
-        try{
-            const signed =
-                await requestSignedBlobUpload(
-                    pathname,
-                    file.size,
-                    file.type ||
-                        "application/octet-stream"
-                );
-
-            await uploadToSignedUrl(
-                signed.uploadUrl,
-                file,
-                queue
-            );
-
-            uploadedDirectly = true;
-        }catch(signedError){
-            console.warn(
-                "SIGNED BLOB UPLOAD FAILED; USING SMALL-FILE FALLBACK WHEN POSSIBLE:",
-                signedError
-            );
-
-            if(file.size > 4 * 1024 * 1024){
-                throw signedError;
-            }
-
-            await uploadSmallFallback(
+        const signed =
+            await requestSignedBlobUpload(
                 pathname,
-                file,
-                queue
+                file.size,
+                file.type ||
+                    "application/octet-stream"
             );
-        }
+
+        await uploadToSignedUrl(
+            signed.uploadUrl,
+            file,
+            queue
+        );
 
         /*
           Verify the completed Blob from the server before the UI says that
@@ -7990,5 +7832,285 @@ async function refreshAll(){
                 );
 
             },
-            
+            650
+        );
+    }
+}
+
+
+document
+    .getElementById(
+        "refreshButton"
+    )
+    .addEventListener(
+        "click",
+        refreshAll
+    );
+
+
+document
+    .getElementById(
+        "topRefresh"
+    )
+    .addEventListener(
+        "click",
+        refreshAll
+    );
+
+
+/* =========================================================
+   QR
+========================================================= */
+
+function openQRCode(){
+
+    qrCode.innerHTML =
+        "";
+
+
+    if(
+        typeof QRCode ===
+        "undefined"
+    ){
+
+        qrCode.textContent =
+            "QR unavailable";
+
+
+        showToast(
+            "QR code library unavailable"
+        );
+
+
+        qrModal.classList.add(
+            "show"
+        );
+
+
+        return;
+    }
+
+
+    const websiteURL =
+        window.location.href;
+
+
+    new QRCode(
+        qrCode,
+        {
+
+            text:
+                websiteURL,
+
+            width:
+                164,
+
+            height:
+                164,
+
+            colorDark:
+                "#07111f",
+
+            colorLight:
+                "#ffffff",
+
+            correctLevel:
+                QRCode.CorrectLevel.M
+        }
+    );
+
+
+    qrModal.classList.add(
+        "show"
+    );
+}
+
+
+function closeQRCode(){
+
+    qrModal.classList.remove(
+        "show"
+    );
+
+    qrCode.innerHTML =
+        "";
+}
+
+
+qrButton.addEventListener(
+    "click",
+    openQRCode
+);
+
+
+qrClose.addEventListener(
+    "click",
+    closeQRCode
+);
+
+
+qrModal.addEventListener(
+    "click",
+    event => {
+
+        if(
+            event.target ===
+            qrModal
+        ){
+
+            closeQRCode();
+        }
+    }
+);
+
+
+/* =========================================================
+   LOAD EVERYTHING
+========================================================= */
+
+async function loadEverything(){
+
+    try{
+
+        await Promise.all([
+            loadStorage(),
+            loadFiles()
+        ]);
+
+    }catch(error){
+
+        console.error(
+            error
+        );
+    }
+}
+
+
+/* =========================================================
+   FORMAT BYTES
+========================================================= */
+
+function formatBytes(
+    bytes
+){
+
+    const value =
+        Number(bytes);
+
+
+    if(
+        !Number.isFinite(value) ||
+        value <= 0
+    ){
+
+        return "0 B";
+    }
+
+
+    const units = [
+        "B",
+        "KB",
+        "MB",
+        "GB",
+        "TB"
+    ];
+
+
+    const index =
+        Math.min(
+            Math.floor(
+                Math.log(value) /
+                Math.log(1024)
+            ),
+            units.length - 1
+        );
+
+
+    return (
+        value /
+        Math.pow(
+            1024,
+            index
+        )
+    )
+        .toFixed(
+            index === 0
+                ? 0
+                : 1
+        ) +
+        " " +
+        units[index];
+}
+
+
+/* =========================================================
+   ESCAPE
+========================================================= */
+
+function escapeHtml(
+    value
+){
+
+    return String(value)
+
+        .replace(
+            /&/g,
+            "&amp;"
+        )
+
+        .replace(
+            /</g,
+            "&lt;"
+        )
+
+        .replace(
+            />/g,
+            "&gt;"
+        )
+
+        .replace(
+            /"/g,
+            "&quot;"
+        )
+
+        .replace(
+            /'/g,
+            "&#039;"
+        );
+}
+
+
+/* =========================================================
+   KEYBOARD
+========================================================= */
+
+document.addEventListener(
+    "keydown",
+    event => {
+
+        if(
+            event.key ===
+            "Escape"
+        ){
+
+            closeViewer();
+
+            closeQRCode();
+        }
+
+
+        if(
+            event.key === "/" &&
+
+            document.activeElement !==
+                searchInput &&
+
+            document.activeElement !==
+                password
+        ){
+
+            event.preventDefault();
+
+            searchInput.focus();
+        }
 Preview truncated for large file
