@@ -1,801 +1,5573 @@
-"use strict";
+<!DOCTYPE html>
+<html lang="en">
 
-/*
-  my-personal-cloud / Cloud-Zen
-  Vercel-ready storage upgrade.
+<head>
 
-  The original UI/API contract is preserved: login, storage status, file list,
-  upload, cancel upload, stream/preview, download, rename, share, delete and
-  download-all keep their original routes. Only the physical storage layer is
-  changed from Telegram MTProto to Vercel Blob Private Storage.
+<meta charset="UTF-8">
 
-  Completed files are NEVER auto-deleted by this application. A completed
-  object is removed only by the explicit DELETE route.
-*/
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+>
 
-const express = require("express");
-const path = require("path");
-const crypto = require("crypto");
-const { Readable } = require("stream");
-const archiver = require("archiver");
-const { put, get, list, del, head, copy, issueSignedToken, presignUrl } = require("@vercel/blob");
-const { handleUpload } = require("@vercel/blob/client");
+<meta
+    name="theme-color"
+    content="#07080d"
+>
 
-const app = express();
-app.disable("x-powered-by");
-app.set("trust proxy", 1);
+<title>My Personal Cloud</title>
 
-const PORT = Number(process.env.PORT || 3000);
-const HOST = "0.0.0.0";
-const PUBLIC_DIR = path.join(__dirname, "public");
+<style>
 
-/* =========================
-   ENVIRONMENT / SECRETS
-========================= */
-const APP_PASSWORD = String(process.env.APP_PASSWORD ?? "").trim();
-const DELETE_PASSWORD = String(process.env.DELETE_PASSWORD ?? "").trim();
-const SESSION_SECRET = String(process.env.SESSION_SECRET ?? "").trim();
-const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 5 * 1024 * 1024 * 1024 * 1024);
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
-const MAX_LOGIN_FAILURES = 3;
-const SHARE_TTL_SECONDS = 7 * 24 * 60 * 60;
-const FILE_PREFIX = "my-personal-cloud/files/";
-const LEGACY_FILE_PREFIX = "my-cloud-io/files/";
+/* =========================================================
+ROOT
+========================================================= */
 
-const authFailures = new Map();
-const deviceLocks = new Map();
+:root{
 
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: false, limit: "1mb" }));
+    --bg:#07080d;
+    --panel:rgba(15,17,28,.76);
+    --panel2:rgba(22,24,38,.72);
 
-app.use((req, res, next) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
-  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
-    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  }
-  next();
-});
+    --text:#f7f4f7;
+    --muted:#96949f;
 
-app.use(express.static(PUBLIC_DIR, {
-  extensions: ["html"],
-  setHeaders(res) {
-    res.setHeader("Cache-Control", "no-store");
-  }
-}));
+    --peach:#f3b4cf;
+    --peach-light:#f6c2ae;
+    --blue:#b9c9ff;
+    --yellow:#ffe28a;
+    --cream:#fff2c7;
 
-function jsonError(res, status, message) {
-  return res.status(status).json({ error: String(message || "Request failed") });
+    --line:rgba(255,255,255,.09);
+
+    --shadow:
+        0 25px 80px
+        rgba(0,0,0,.45);
 }
 
-function b64url(value) {
-  return Buffer.from(String(value)).toString("base64url");
+
+/* =========================================================
+RESET
+========================================================= */
+
+*{
+    box-sizing:border-box;
 }
 
-function safeEqual(a, b) {
-  const aa = Buffer.from(String(a));
-  const bb = Buffer.from(String(b));
-  return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
+html,
+body{
+    margin:0;
+    min-height:100%;
 }
 
-function signPayload(payload) {
-  if (!SESSION_SECRET) throw new Error("SESSION_SECRET is not configured.");
-  const body = b64url(JSON.stringify(payload));
-  const signature = crypto.createHmac("sha256", SESSION_SECRET).update(body).digest("base64url");
-  return `${body}.${signature}`;
+body{
+
+    background:
+        radial-gradient(
+            circle at 50% -20%,
+            rgba(110,120,255,.12),
+            transparent 45%
+        ),
+        var(--bg);
+
+    color:var(--text);
+
+    font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+    overflow-x:hidden;
 }
 
-function verifyPayload(token) {
-  if (!SESSION_SECRET || !token) return null;
-  const parts = String(token).split(".");
-  if (parts.length !== 2) return null;
-  const [body, signature] = parts;
-  const expected = crypto.createHmac("sha256", SESSION_SECRET).update(body).digest("base64url");
-  if (!safeEqual(signature, expected)) return null;
-  try {
-    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-    if (!payload || Number(payload.exp) <= Date.now()) return null;
-    return payload;
-  } catch {
-    return null;
-  }
+
+/* =========================================================
+STAR BACKGROUND
+========================================================= */
+
+#spaceCanvas{
+
+    position:fixed;
+
+    inset:0;
+
+    width:100%;
+    height:100%;
+
+    pointer-events:none;
+
+    z-index:0;
 }
 
-function getCookie(req, name) {
-  const raw = String(req.headers.cookie || "");
-  const match = raw.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
-  return match ? decodeURIComponent(match[1]) : "";
+
+/* =========================================================
+APP
+========================================================= */
+
+#app{
+
+    position:relative;
+
+    z-index:2;
+
+    min-height:100vh;
+
+    padding:
+        max(20px, env(safe-area-inset-top))
+        18px
+        max(30px, env(safe-area-inset-bottom));
 }
 
-function getSession(req) {
-  const token = getCookie(req, "cloud_zen_session") || getCookie(req, "my_cloud_io_session");
-  const payload = verifyPayload(token);
-  return payload?.type === "session" ? payload : null;
+
+/* =========================================================
+INTRO
+========================================================= */
+
+#introScreen{
+
+    position:fixed;
+
+    inset:0;
+
+    z-index:100;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    background:
+        radial-gradient(
+            circle at center,
+            rgba(20,24,50,.88),
+            rgba(4,5,10,.98)
+        );
+
+    transition:
+        opacity .8s ease,
+        visibility .8s ease;
 }
 
-function makeSession() {
-  return signPayload({ type: "session", iat: Date.now(), exp: Date.now() + SESSION_TTL_MS });
+#introScreen.hide{
+
+    opacity:0;
+
+    visibility:hidden;
+
+    pointer-events:none;
 }
 
-function deviceKey(req) {
-  const ip = String(req.ip || req.socket?.remoteAddress || "unknown");
-  const ua = String(req.headers["user-agent"] || "unknown");
-  const device = String(req.headers["x-cloud-device"] || "");
-  return crypto.createHash("sha256").update(`${ip}|${ua}|${device}`).digest("hex");
-}
 
-function isLocked(req, area) {
-  const key = `${area}:${deviceKey(req)}`;
-  const until = deviceLocks.get(key) || 0;
-  if (until > Date.now()) return true;
-  deviceLocks.delete(key);
-  return false;
-}
+.introContent{
 
-function registerFailure(req, area) {
-  const key = `${area}:${deviceKey(req)}`;
-  const count = (authFailures.get(key) || 0) + 1;
-  if (count >= MAX_LOGIN_FAILURES) {
-    authFailures.delete(key);
-    deviceLocks.set(key, Date.now() + DEVICE_LOCK_MS);
-    return true;
-  }
-  authFailures.set(key, count);
-  return false;
-}
-
-function clearFailures(req, area) {
-  authFailures.delete(`${area}:${deviceKey(req)}`);
-}
-
-function requireAuth(req, res, next) {
-  const session = getSession(req);
-  if (!session) return jsonError(res, 401, "Authentication required");
-  req.cloudSession = session;
-  next();
-}
-
-function requireDeletePassword(req, res, next) {
-  if (isLocked(req, "delete")) return jsonError(res, 423, "Delete access is locked for 24 hours on this device.");
-  const password = String(req.body?.deletePassword ?? "").trim();
-  if (!DELETE_PASSWORD || !safeEqual(password, DELETE_PASSWORD)) {
-    const locked = registerFailure(req, "delete");
-    return jsonError(res, locked ? 423 : 403, locked ? "Delete access locked for 24 hours." : "Incorrect delete password.");
-  }
-  clearFailures(req, "delete");
-  next();
-}
-
-function cleanName(value) {
-  const base = path.basename(String(value || "file")).replace(/[\u0000]/g, "").trim();
-  return (base || "file").slice(0, 240);
-}
-
-function cleanRelativePath(value) {
-  const raw = String(value || "").replace(/\\/g, "/");
-  const parts = raw.split("/").filter(Boolean).map(part => part.replace(/[\u0000]/g, "").trim()).filter(Boolean);
-  return parts.filter(part => part !== "." && part !== "..").map(part => part.slice(0, 180)).join("/").slice(0, 1200);
-}
-
-function formatBytes(bytes) {
-  const n = Number(bytes) || 0;
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB", "TB", "PB"];
-  let value = n;
-  let i = -1;
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024;
-    i += 1;
-  }
-  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[i]}`;
-}
-
-function mimeFor(name) {
-  const ext = path.extname(String(name || "")).toLowerCase();
-  const map = {
-    ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".gif":"image/gif", ".webp":"image/webp", ".svg":"image/svg+xml", ".bmp":"image/bmp", ".ico":"image/x-icon",
-    ".mp4":"video/mp4", ".webm":"video/webm", ".mov":"video/quicktime", ".mkv":"video/x-matroska", ".avi":"video/x-msvideo", ".m4v":"video/x-m4v",
-    ".mp3":"audio/mpeg", ".wav":"audio/wav", ".m4a":"audio/mp4", ".aac":"audio/aac", ".ogg":"audio/ogg", ".flac":"audio/flac",
-    ".pdf":"application/pdf", ".txt":"text/plain", ".csv":"text/csv", ".json":"application/json", ".xml":"application/xml", ".html":"text/html", ".md":"text/markdown",
-    ".zip":"application/zip", ".rar":"application/vnd.rar", ".7z":"application/x-7z-compressed", ".gz":"application/gzip",
-    ".doc":"application/msword", ".docx":"application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".xls":"application/vnd.ms-excel", ".xlsx":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".ppt":"application/vnd.ms-powerpoint", ".pptx":"application/vnd.openxmlformats-officedocument.presentationml.presentation"
-  };
-  return map[ext] || "application/octet-stream";
-}
-
-function storageConfiguredHint() {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.VERCEL_OIDC_TOKEN || process.env.VERCEL_BLOB_STORE_ID);
-}
-
-async function blobHealth() {
-  try {
-    await list({ prefix: FILE_PREFIX, limit: 1 });
-    return { configured: true, connected: true, error: "" };
-  } catch (error) {
-    return { configured: storageConfiguredHint(), connected: false, error: error?.message || String(error) };
-  }
-}
-
-function makePath(id, relativePath, name) {
-  const safeRelative = cleanRelativePath(relativePath);
-  const safeName = cleanName(name);
-  return `${FILE_PREFIX}${id}/${safeRelative ? `${safeRelative}/` : ""}${encodeURIComponent(safeName)}`;
-}
-
-function parseFilePath(pathname) {
-  const raw = String(pathname || "");
-  const prefix = raw.startsWith(FILE_PREFIX) ? FILE_PREFIX : raw.startsWith(LEGACY_FILE_PREFIX) ? LEGACY_FILE_PREFIX : null;
-  if (!prefix) return null;
-  const rest = raw.slice(prefix.length);
-  const slash = rest.indexOf("/");
-  if (slash <= 0) return null;
-  const id = rest.slice(0, slash);
-  const parts = rest.slice(slash + 1).split("/").map(part => {
-    try { return decodeURIComponent(part); } catch { return part; }
-  });
-  const name = parts.pop() || "file";
-  return { id, name: cleanName(name), relativePath: cleanRelativePath(parts.join("/")) };
-}
-
-function publicFile(meta) {
-  return {
-    name: meta.name,
-    size: Number(meta.size || 0),
-    sizeText: formatBytes(meta.size),
-    modified: meta.modified || meta.uploadedAt || null,
-    type: meta.type || meta.mime || mimeFor(meta.name),
-    storage: "CLOUD",
-    storageLabel: "Vercel Blob",
-    chunks: meta.total || 1,
-    pathname: meta.pathname,
-    relativePath: meta.relativePath || ""
-  };
-}
-
-async function listAllFiles() {
-  const files = [];
-  const seen = new Set();
-  const prefixes = [FILE_PREFIX, LEGACY_FILE_PREFIX];
-
-  for (const prefix of prefixes) {
-    let cursor;
-    do {
-      const result = await list({ prefix, limit: 1000, cursor });
-      for (const blob of result.blobs || []) {
-        if (seen.has(blob.pathname)) continue;
-        const parsed = parseFilePath(blob.pathname);
-        if (!parsed) continue;
-        seen.add(blob.pathname);
-        files.push({
-          name: parsed.name,
-          size: Number(blob.size || 0),
-          sizeText: formatBytes(blob.size),
-          modified: blob.uploadedAt || null,
-          uploadedAt: blob.uploadedAt || null,
-          type: blob.contentType || mimeFor(parsed.name),
-          mime: blob.contentType || mimeFor(parsed.name),
-          pathname: blob.pathname,
-          relativePath: parsed.relativePath,
-          etag: blob.etag,
-          url: blob.url,
-          downloadUrl: blob.downloadUrl
-        });
-      }
-      cursor = result.cursor;
-    } while (cursor);
-  }
-
-  files.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  return files;
-}
-
-async function findFile(name) {
-  const clean = cleanName(name);
-  const files = await listAllFiles();
-  return files.find(file => file.name === clean) || null;
-}
-
-async function findByPathname(pathname) {
-  const safe = String(pathname || "");
-  if (!safe.startsWith(FILE_PREFIX) && !safe.startsWith(LEGACY_FILE_PREFIX)) return null;
-  try { return await head(safe, { access: "private" }); } catch { return null; }
-}
-
-/* =========================
-   AUTH
-========================= */
-app.post("/api/auth/login", (req, res) => {
-  if (isLocked(req, "login")) return jsonError(res, 423, "Access locked for 24 hours on this device.");
-  if (!APP_PASSWORD) return jsonError(res, 500, "APP_PASSWORD is not configured in Vercel.");
-  const password = String(req.body?.password || "");
-  if (!safeEqual(password, APP_PASSWORD)) {
-    const locked = registerFailure(req, "login");
-    return jsonError(res, locked ? 423 : 401, locked ? "Access locked for 24 hours." : "Incorrect password");
-  }
-  clearFailures(req, "login");
-  const secure = Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
-  const token = encodeURIComponent(makeSession());
-  res.setHeader("Set-Cookie", `cloud_zen_session=${token}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
-  res.json({ ok: true });
-});
-
-app.get("/api/auth/me", (req, res) => res.json({ authenticated: Boolean(getSession(req)) }));
-
-app.post("/api/auth/logout", (req, res) => {
-  res.setHeader("Set-Cookie", "cloud_zen_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
-  res.json({ ok: true });
-});
-
-/* Compatibility endpoint from the original project. */
-app.post("/api/access/download", requireAuth, (req, res) => {
-  res.json({ ok: true, expiresIn: 0, message: "Download is protected by the main Enter password." });
-});
-
-/* =========================
-   HEALTH / STORAGE
-========================= */
-app.get("/api/health", async (req, res) => {
-  const storage = await blobHealth();
-  res.status(storage.connected ? 200 : 503).json({
-    success: storage.connected,
-    status: storage.connected ? "online" : "degraded",
-    storage: "Cloud Storage",
-    persistent: true,
-    multipart: true,
-    provider: "Vercel Blob Private Storage",
-    completedFilesAutoDelete: false,
-    blob: storage,
-    telegram: { configured: false, connected: false, disabled: true },
-    time: new Date().toISOString()
-  });
-});
-
-app.get("/api/storage", requireAuth, async (req, res) => {
-  try {
-    const files = await listAllFiles();
-    const used = files.reduce((sum, file) => sum + Number(file.size || 0), 0);
-    const percent = Math.min(100, Number(((used / Math.max(1, MAX_FILE_SIZE)) * 100).toFixed(2)));
-    const storage = await blobHealth();
-    res.json({
-      usedBytes: used,
-      usedText: formatBytes(used),
-      remainingBytes: null,
-      remainingText: storage.connected ? "Vercel Blob" : "Blob not connected",
-      usedPercent: percent,
-      limitText: "Cloud",
-      provider: { configured: storage.configured, connected: storage.connected, usedText: formatBytes(used), remainingText: storage.connected ? "Vercel Blob" : "Not connected" },
-      b2: { configured: false, connected: false },
-      mega: { configured: false, connected: false },
-      idriveE2: { configured: false, connected: false },
-      cloudinary: { configured: false, connected: false },
-      filebase: { configured: false, connected: false },
-      koofr: { configured: false, connected: false },
-      vercelBlob: { configured: storage.configured, connected: storage.connected },
-      retention: "PERMANENT UNTIL MANUAL DELETE",
-      autoDelete: false
-    });
-  } catch (error) {
-    return jsonError(res, 503, error?.message || "Storage unavailable");
-  }
-});
-
-/* =========================
-   FILE LIST
-========================= */
-app.get("/api/files", requireAuth, async (req, res) => {
-  try {
-    const files = await listAllFiles();
-    res.json(files.map(publicFile));
-  } catch (error) {
-    console.error("FILE LIST ERROR:", error?.stack || error);
-    return jsonError(res, 503, "Storage index unavailable");
-  }
-});
-
-/* =========================
-   DIRECT VERCEL BLOB CLIENT UPLOAD
-========================= */
-app.post("/api/blob-upload-url", requireAuth, async (req, res) => {
-  try {
-    const pathname = String(req.body?.pathname || "");
-    const size = Number(req.body?.size);
-    const contentType = String(req.body?.contentType || "application/octet-stream").slice(0, 180);
-
-    if (!pathname.startsWith(FILE_PREFIX)) return jsonError(res, 400, "Invalid upload path");
-    if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_FILE_SIZE) {
-      return jsonError(res, 400, `File size must be between 1 byte and ${formatBytes(MAX_FILE_SIZE)}`);
-    }
-
-    // A short-lived URL is scoped to this exact pathname and PUT operation.
-    // The file bytes go directly from the browser to Vercel Blob, never through
-    // the Vercel Function, so the Function 4.5 MB request limit is avoided.
-    const token = await issueSignedToken({
-      pathname,
-      operations: ["put"],
-      validUntil: Date.now() + 15 * 60 * 1000
-    });
-
-    const signed = await presignUrl(token, {
-      pathname,
-      operation: "put",
-      validUntil: Date.now() + 15 * 60 * 1000
-    });
-
-    res.json({
-      ok: true,
-      pathname,
-      uploadUrl: signed.presignedUrl,
-      expiresAt: Date.now() + 15 * 60 * 1000,
-      contentType
-    });
-  } catch (error) {
-    console.error("BLOB SIGNED UPLOAD ERROR:", error?.stack || error);
-    const message = String(error?.message || error);
-    if (/No blob credentials|credentials found|BLOB_READ_WRITE_TOKEN|oidc|store/i.test(message)) {
-      return jsonError(res, 503, "Vercel Blob is not connected. Connect a PRIVATE Blob store to this Vercel project and redeploy.");
-    }
-    return jsonError(res, 400, message);
-  }
-});
-
-app.post("/api/blob-upload", requireAuth, async (req, res) => {
-  try {
-    const body = req.body;
-    const result = await handleUpload({
-      body,
-      request: req,
-      onBeforeGenerateToken: async (pathname, clientPayload, multipart) => {
-        if (!String(pathname).startsWith(FILE_PREFIX)) throw new Error("Invalid upload path");
-        let payload = {};
-        try { payload = JSON.parse(String(clientPayload || "{}")); } catch { throw new Error("Invalid upload metadata"); }
-        const size = Number(payload.size || 0);
-        if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_FILE_SIZE) {
-          throw new Error(`File size must be between 1 byte and ${formatBytes(MAX_FILE_SIZE)}`);
-        }
-        return {
-          allowedContentTypes: ["*/*"],
-          addRandomSuffix: false,
-          access: "private",
-          multipart: Boolean(multipart),
-          tokenPayload: JSON.stringify({
-            id: String(payload.id || ""),
-            size,
-            name: cleanName(payload.name),
-            relativePath: cleanRelativePath(payload.relativePath)
-          })
-        };
-      },
-      onUploadCompleted: async () => {
-        // Blob is the durable source of truth. Completed objects are not auto-deleted.
-      }
-    });
-    res.json(result);
-  } catch (error) {
-    console.error("BLOB CLIENT UPLOAD ERROR:", error?.stack || error);
-    const message = String(error?.message || error);
-    if (/No blob credentials|credentials found|BLOB_READ_WRITE_TOKEN|oidcToken|BLOB_STORE_ID/i.test(message)) {
-      return jsonError(res, 503, "Vercel Blob is not connected. In Vercel open Storage → Create Database → Blob → Private, connect it to this project, enable Production, then redeploy.");
-    }
-    return jsonError(res, 400, message);
-  }
-});
-
-/* Keep the old endpoint name so stale browser code gets a clear message instead of a generic 404. */
-app.post("/api/upload-chunk", requireAuth, (req, res) => {
-  return jsonError(res, 410, "This Vercel build uses direct browser-to-Blob multipart uploads. Please refresh the page and try the upload again.");
-});
-
-app.post("/api/register-upload", requireAuth, async (req, res) => {
-  try {
-    const pathname = String(req.body?.pathname || "");
-    const expectedSize = Number(req.body?.size);
-    if (!pathname.startsWith(FILE_PREFIX)) return jsonError(res, 400, "Invalid Blob pathname");
-    if (!Number.isSafeInteger(expectedSize) || expectedSize <= 0 || expectedSize > MAX_FILE_SIZE) return jsonError(res, 400, "Invalid file size");
-    const blob = await findByPathname(pathname);
-    if (!blob || Number(blob.size) !== expectedSize) return jsonError(res, 409, "Uploaded Blob could not be verified");
-    res.json({ ok: true, verified: true, pathname: blob.pathname, size: blob.size, etag: blob.etag });
-  } catch (error) {
-    return jsonError(res, 400, error?.message || "Upload verification failed");
-  }
-});
-
-app.delete("/api/upload/:id", requireAuth, async (req, res) => {
-  // Client cancellation normally leaves no completed object. If an object was
-  // already completed under this UUID, remove only that explicitly cancelled id.
-  const id = cleanName(req.params.id);
-  try {
-    const files = await listAllFiles();
-    const matches = files.filter(file => parseFilePath(file.pathname)?.id === id);
-    for (const file of matches) await del(file.pathname, { access: "private" });
-    res.json({ ok: true });
-  } catch (error) {
-    return jsonError(res, 400, error?.message || "Cancel failed");
-  }
-});
-
-/* =========================
-   STREAM / DOWNLOAD
-========================= */
-async function streamBlob(req, res, pathname, inline) {
-  const safe = String(pathname || "");
-  if (!safe.startsWith(FILE_PREFIX) && !safe.startsWith(LEGACY_FILE_PREFIX)) return res.status(404).send("File not found");
-  const range = String(req.headers.range || "").trim();
-  const options = { access: "private" };
-  if (range) options.range = range;
-  const result = await get(safe, options);
-  if (!result || !result.stream || ![200, 206].includes(Number(result.statusCode))) return res.status(404).send("File not found");
-  const blob = result.blob || {};
-  res.status(Number(result.statusCode));
-  res.setHeader("Content-Type", blob.contentType || "application/octet-stream");
-  res.setHeader("Accept-Ranges", "bytes");
-  res.setHeader("Cache-Control", "private, no-store");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  if (blob.etag) res.setHeader("ETag", blob.etag);
-  const contentRange = result.headers?.get?.("content-range");
-  const contentLength = result.headers?.get?.("content-length");
-  if (contentRange) res.setHeader("Content-Range", contentRange);
-  if (contentLength) res.setHeader("Content-Length", contentLength);
-  const parsed = parseFilePath(safe);
-  if (inline) {
-    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(parsed?.name || "file")}`);
-  } else {
-    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(parsed?.name || "file")}`);
-  }
-  Readable.fromWeb(result.stream).pipe(res);
-}
-
-app.get(/^\/api\/stream\/(.+)$/, requireAuth, async (req, res) => {
-  try {
-    const name = decodeURIComponent(req.params[0]);
-    const file = await findFile(name);
-    if (!file) return res.status(404).send("File not found");
-    await streamBlob(req, res, file.pathname, true);
-  } catch (error) {
-    if (!res.headersSent) res.status(404).send("File not found"); else res.destroy(error);
-  }
-});
-
-app.get(/^\/api\/download\/(.+)$/, requireAuth, async (req, res) => {
-  try {
-    const name = decodeURIComponent(req.params[0]);
-    const file = await findFile(name);
-    if (!file) return res.status(404).send("File not found");
-    await streamBlob(req, res, file.pathname, false);
-  } catch (error) {
-    if (!res.headersSent) res.status(404).send("Download failed"); else res.destroy(error);
-  }
-});
-
-/* Query-style compatibility routes for the newer client build. */
-app.get("/api/stream", requireAuth, async (req, res) => {
-  try {
-    const pathname = String(req.query.pathname || "");
-    const blob = await findByPathname(pathname);
-    if (!blob) return res.status(404).send("File not found");
-    await streamBlob(req, res, pathname, true);
-  } catch (error) {
-    if (!res.headersSent) res.status(404).send("File not found"); else res.destroy(error);
-  }
-});
-
-app.get("/api/download", requireAuth, async (req, res) => {
-  try {
-    const pathname = String(req.query.pathname || "");
-    const blob = await findByPathname(pathname);
-    if (!blob) return res.status(404).send("File not found");
-    await streamBlob(req, res, pathname, false);
-  } catch (error) {
-    if (!res.headersSent) res.status(404).send("Download failed"); else res.destroy(error);
-  }
-});
-
-/* =========================
-   RENAME
-========================= */
-app.patch("/api/files", requireAuth, async (req, res) => {
-  try {
-    const oldName = cleanName(req.body?.name || "");
-    const newName = cleanName(req.body?.newName || "");
-    const requestedPathname = String(req.body?.pathname || "");
-
-    if (!oldName || !newName || oldName === newName) {
-      return jsonError(res, 400, "Enter a different file name.");
-    }
-
-    let file = requestedPathname
-      ? await findByPathname(requestedPathname)
-      : null;
-
-    if (!file) file = await findFile(oldName);
-    if (!file) return jsonError(res, 404, "File not found");
-
-    const parsed = parseFilePath(file.pathname);
-    const newPath = makePath(
-      parsed?.id || crypto.randomUUID(),
-      parsed?.relativePath || "",
-      newName
+    width:min(
+        520px,
+        90vw
     );
 
-    const duplicate = await findByPathname(newPath);
-    if (duplicate) {
-      return jsonError(res, 409, "A file with that name already exists in this folder.");
+    text-align:center;
+}
+
+
+.introLogo{
+
+    width:108px;
+    height:108px;
+
+    margin:0 auto 24px;
+
+    border-radius:32px;
+
+    display:grid;
+
+    place-items:center;
+
+    font-size:44px;
+
+    font-weight:900;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(185,201,255,.28),
+            rgba(243,180,207,.14)
+        );
+
+    border:
+        1px solid
+        rgba(255,255,255,.2);
+
+    box-shadow:
+        inset 0 0 35px
+        rgba(185,201,255,.18),
+
+        0 0 55px
+        rgba(185,201,255,.12);
+
+    animation:
+        logoPulse 3s ease-in-out infinite;
+}
+
+
+@keyframes logoPulse{
+
+    0%,
+    100%{
+        transform:scale(1);
+        filter:brightness(1);
     }
 
-    await copy(file.pathname, newPath, {
-      access: "private",
-      addRandomSuffix: false
-    });
+    50%{
+        transform:scale(1.04);
+        filter:brightness(1.25);
+    }
+}
 
-    await del(file.pathname, { access: "private" });
 
-    const renamed = {
-      ...file,
-      name: newName,
-      pathname: newPath,
-      type: mimeFor(newName),
-      mime: mimeFor(newName),
-      modified: new Date().toISOString()
+.introWelcome{
+
+    margin:0;
+
+    font-size:
+        clamp(
+            42px,
+            11vw,
+            70px
+        );
+
+    line-height:.95;
+
+    font-weight:900;
+
+    letter-spacing:-.06em;
+
+    background:
+        linear-gradient(
+            90deg,
+            var(--blue),
+            var(--peach),
+            var(--yellow)
+        );
+
+    -webkit-background-clip:text;
+    background-clip:text;
+
+    color:transparent;
+
+    animation:
+        welcomePulse 2.5s ease-in-out infinite;
+}
+
+
+@keyframes welcomePulse{
+
+    0%,
+    100%{
+        filter:brightness(1);
+    }
+
+    50%{
+        filter:brightness(1.25);
+    }
+}
+
+
+.introSub{
+
+    margin:
+        16px
+        0
+        28px;
+
+    color:var(--muted);
+
+    font-size:14px;
+}
+
+
+.loadingLine{
+
+    position:relative;
+
+    width:min(
+        350px,
+        78vw
+    );
+
+    height:4px;
+
+    margin:auto;
+
+    overflow:hidden;
+
+    border-radius:100px;
+
+    background:
+        rgba(255,255,255,.08);
+}
+
+
+.loadingLine::before{
+
+    content:"";
+
+    position:absolute;
+
+    inset:0;
+
+    width:50%;
+
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            var(--blue),
+            var(--peach),
+            transparent
+        );
+
+    filter:
+        blur(2px);
+
+    animation:
+        loading 1.8s
+        cubic-bezier(.22,.61,.36,1)
+        infinite;
+}
+
+
+.loadingLine::after{
+
+    content:"✦";
+
+    position:absolute;
+
+    top:50%;
+
+    left:-20px;
+
+    transform:
+        translateY(-50%);
+
+    color:white;
+
+    text-shadow:
+        0 0 7px white,
+        0 0 18px var(--blue),
+        0 0 30px var(--peach);
+
+    animation:
+        starLoading 1.8s
+        cubic-bezier(.22,.61,.36,1)
+        infinite;
+}
+
+
+@keyframes loading{
+
+    from{
+        transform:translateX(-100%);
+    }
+
+    to{
+        transform:translateX(220%);
+    }
+}
+
+
+@keyframes starLoading{
+
+    from{
+        left:-20px;
+    }
+
+    to{
+        left:calc(100% + 20px);
+    }
+}
+
+
+/* =========================================================
+LOGIN
+========================================================= */
+
+.loginWrap{
+
+    min-height:100vh;
+
+    display:none;
+
+    align-items:center;
+
+    justify-content:center;
+}
+
+
+.loginWrap.show{
+    display:flex;
+}
+
+
+.loginCard{
+
+    width:min(
+        430px,
+        94vw
+    );
+
+    padding:34px;
+
+    border:
+        1px solid
+        var(--line);
+
+    border-radius:28px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(25,28,45,.86),
+            rgba(10,11,18,.86)
+        );
+
+    backdrop-filter:
+        blur(24px);
+
+    box-shadow:
+        var(--shadow);
+}
+
+
+.loginTitle{
+
+    margin:0 0 8px;
+
+    font-size:32px;
+
+    font-weight:900;
+}
+
+
+.loginText{
+
+    margin:0 0 24px;
+
+    color:var(--muted);
+
+    font-size:14px;
+}
+
+
+input[type="password"]{
+
+    width:100%;
+
+    padding:15px 16px;
+
+    border-radius:15px;
+
+    border:
+        1px solid
+        var(--line);
+
+    background:
+        rgba(255,255,255,.045);
+
+    color:white;
+
+    outline:none;
+
+    font-size:16px;
+}
+
+
+input[type="password"]:focus{
+
+    border-color:
+        rgba(185,201,255,.55);
+
+    box-shadow:
+        0 0 0 4px
+        rgba(185,201,255,.08);
+}
+
+
+.primary{
+
+    width:100%;
+
+    margin-top:14px;
+
+    padding:15px;
+
+    border:0;
+
+    border-radius:15px;
+
+    cursor:pointer;
+
+    font-weight:800;
+
+    font-size:15px;
+
+    color:#080912;
+
+    background:
+        linear-gradient(
+            100deg,
+            var(--blue),
+            var(--peach),
+            var(--yellow)
+        );
+}
+
+
+.errorText{
+
+    min-height:20px;
+
+    margin-top:12px;
+
+    color:#ff9dba;
+
+    font-size:13px;
+}
+
+
+/* =========================================================
+MAIN
+========================================================= */
+
+.dashboard{
+
+    display:none;
+
+    max-width:1200px;
+
+    margin:auto;
+}
+
+
+.dashboard.show{
+    display:block;
+}
+
+
+.topbar{
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:space-between;
+
+    gap:15px;
+
+    padding:
+        10px
+        0
+        24px;
+}
+
+
+.brand{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:12px;
+}
+
+
+.brandLogo{
+
+    width:48px;
+    height:48px;
+
+    display:grid;
+
+    place-items:center;
+
+    border-radius:15px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(185,201,255,.2),
+            rgba(243,180,207,.13)
+        );
+
+    border:
+        1px solid
+        var(--line);
+
+    box-shadow:
+        inset 0 0 20px
+        rgba(185,201,255,.12);
+}
+
+
+.brandTitle{
+
+    margin:0;
+
+    font-size:18px;
+
+    font-weight:900;
+}
+
+
+.brandStatus{
+
+    margin:3px 0 0;
+
+    color:#8ff0bd;
+
+    font-size:12px;
+}
+
+
+.logout{
+
+    border:
+        1px solid
+        var(--line);
+
+    background:
+        rgba(255,255,255,.04);
+
+    color:var(--muted);
+
+    padding:
+        10px 14px;
+
+    border-radius:12px;
+
+    cursor:pointer;
+}
+
+
+/* =========================================================
+STORAGE CARD
+========================================================= */
+
+.storageCard{
+
+    padding:22px;
+
+    border:
+        1px solid
+        var(--line);
+
+    border-radius:24px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(23,25,42,.82),
+            rgba(11,12,20,.72)
+        );
+
+    backdrop-filter:
+        blur(22px);
+
+    box-shadow:
+        var(--shadow);
+}
+
+
+.storageTop{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    gap:15px;
+
+    align-items:flex-end;
+}
+
+
+.storageLabel{
+
+    color:var(--muted);
+
+    font-size:12px;
+
+    text-transform:uppercase;
+
+    letter-spacing:.12em;
+}
+
+
+.storageNumber{
+
+    margin-top:5px;
+
+    font-size:28px;
+
+    font-weight:900;
+}
+
+
+.storagePercent{
+
+    font-size:24px;
+
+    font-weight:900;
+
+    color:var(--blue);
+}
+
+
+.progress{
+
+    position:relative;
+
+    height:10px;
+
+    margin-top:18px;
+
+    overflow:hidden;
+
+    border-radius:100px;
+
+    background:
+        rgba(255,255,255,.07);
+}
+
+
+.progressBar{
+
+    height:100%;
+
+    width:0%;
+
+    border-radius:100px;
+
+    background:
+        linear-gradient(
+            90deg,
+            var(--blue),
+            var(--peach),
+            var(--yellow)
+        );
+
+    box-shadow:
+        0 0 18px
+        rgba(185,201,255,.4);
+
+    transition:
+        width .6s ease;
+}
+
+
+.storageBottom{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    gap:15px;
+
+    margin-top:10px;
+
+    color:var(--muted);
+
+    font-size:12px;
+}
+
+
+/* =========================================================
+STORAGE BREAKDOWN
+========================================================= */
+
+.storageBreakdown{
+
+    display:grid;
+
+    grid-template-columns:
+        repeat(
+            3,
+            minmax(0,1fr)
+        );
+
+    gap:9px;
+
+    margin-top:17px;
+}
+
+
+.breakdownItem{
+
+    padding:12px;
+
+    border:
+        1px solid
+        var(--line);
+
+    border-radius:14px;
+
+    background:
+        rgba(255,255,255,.025);
+}
+
+
+.breakdownLabel{
+
+    color:var(--muted);
+
+    font-size:10px;
+
+    text-transform:uppercase;
+
+    letter-spacing:.08em;
+}
+
+
+.breakdownValue{
+
+    margin-top:4px;
+
+    font-size:14px;
+
+    font-weight:900;
+}
+
+
+/* =========================================================
+UPLOAD
+========================================================= */
+
+.uploadCard{
+
+    margin-top:18px;
+
+    padding:22px;
+
+    border:
+        1px dashed
+        rgba(185,201,255,.28);
+
+    border-radius:24px;
+
+    background:
+        rgba(185,201,255,.035);
+
+    text-align:center;
+}
+
+
+.uploadButton{
+
+    display:inline-flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    padding:
+        14px 22px;
+
+    border-radius:15px;
+
+    cursor:pointer;
+
+    font-weight:900;
+
+    color:#090a10;
+
+    background:
+        linear-gradient(
+            100deg,
+            var(--blue),
+            var(--peach)
+        );
+}
+
+
+.uploadHint{
+
+    margin:
+        12px
+        0
+        0;
+
+    color:var(--muted);
+
+    font-size:12px;
+}
+
+
+#fileInput{
+    display:none;
+}
+
+
+#uploadSelectedButton{
+
+    width:auto;
+
+    margin:
+        12px auto
+        0;
+
+    display:none;
+
+    padding:
+        13px 22px;
+}
+
+
+/* =========================================================
+UPLOAD QUEUE
+========================================================= */
+
+#uploadQueue{
+
+    display:flex;
+
+    flex-direction:column;
+
+    gap:10px;
+
+    margin-top:15px;
+}
+
+
+.queueItem{
+
+    padding:14px;
+
+    border:
+        1px solid
+        var(--line);
+
+    border-radius:16px;
+
+    background:
+        rgba(255,255,255,.035);
+}
+
+
+.queueTop{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    gap:10px;
+
+    font-size:13px;
+}
+
+
+.queueName{
+
+    overflow:hidden;
+
+    text-overflow:ellipsis;
+
+    white-space:nowrap;
+}
+
+
+.queuePercent{
+
+    color:var(--blue);
+
+    font-weight:800;
+}
+
+
+.queueProgress{
+
+    height:5px;
+
+    margin-top:9px;
+
+    overflow:hidden;
+
+    border-radius:100px;
+
+    background:
+        rgba(255,255,255,.07);
+}
+
+
+.queueProgress > div{
+
+    height:100%;
+
+    width:0%;
+
+    background:
+        linear-gradient(
+            90deg,
+            var(--blue),
+            var(--peach)
+        );
+
+    transition:
+        width .2s ease;
+}
+
+
+/* =========================================================
+FILES HEADER
+========================================================= */
+
+.filesHeader{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    gap:12px;
+
+    margin-top:28px;
+
+    margin-bottom:13px;
+}
+
+
+.filesTitle{
+
+    margin:0;
+
+    font-size:21px;
+
+    font-weight:900;
+}
+
+
+.refresh{
+
+    padding:
+        9px 13px;
+
+    border-radius:12px;
+
+    border:
+        1px solid
+        var(--line);
+
+    color:var(--muted);
+
+    background:
+        rgba(255,255,255,.035);
+
+    cursor:pointer;
+}
+
+
+/* =========================================================
+FILE TOOLBAR
+========================================================= */
+
+.fileToolbar{
+
+    display:flex;
+
+    flex-direction:column;
+
+    gap:12px;
+
+    margin-bottom:16px;
+}
+
+
+.searchBox{
+
+    position:relative;
+
+    width:100%;
+}
+
+
+.searchInput{
+
+    width:100%;
+
+    padding:
+        14px
+        16px
+        14px
+        43px;
+
+    border-radius:15px;
+
+    border:
+        1px solid
+        var(--line);
+
+    outline:none;
+
+    color:var(--text);
+
+    background:
+        rgba(255,255,255,.045);
+
+    font-size:14px;
+
+    transition:
+        border-color .2s ease,
+        box-shadow .2s ease;
+}
+
+
+.searchInput:focus{
+
+    border-color:
+        rgba(185,201,255,.5);
+
+    box-shadow:
+        0 0 0 4px
+        rgba(185,201,255,.06);
+}
+
+
+.searchIcon{
+
+    position:absolute;
+
+    left:15px;
+
+    top:50%;
+
+    transform:
+        translateY(-50%);
+
+    color:var(--muted);
+
+    pointer-events:none;
+}
+
+
+.filterRow{
+
+    display:flex;
+
+    gap:8px;
+
+    overflow-x:auto;
+
+    padding-bottom:2px;
+
+    scrollbar-width:none;
+}
+
+
+.filterRow::-webkit-scrollbar{
+    display:none;
+}
+
+
+.filterButton{
+
+    flex:
+        0 0 auto;
+
+    padding:
+        9px 13px;
+
+    border-radius:12px;
+
+    border:
+        1px solid
+        var(--line);
+
+    color:var(--muted);
+
+    background:
+        rgba(255,255,255,.035);
+
+    cursor:pointer;
+
+    font-size:12px;
+
+    font-weight:800;
+
+    transition:
+        .2s ease;
+}
+
+
+.filterButton.active{
+
+    color:#090a10;
+
+    border-color:
+        transparent;
+
+    background:
+        linear-gradient(
+            100deg,
+            var(--blue),
+            var(--peach)
+        );
+}
+
+
+/* =========================================================
+FILE LIST
+========================================================= */
+
+#fileList{
+
+    display:grid;
+
+    grid-template-columns:
+        repeat(
+            auto-fill,
+            minmax(270px,1fr)
+        );
+
+    gap:14px;
+}
+
+
+.empty{
+
+    grid-column:1/-1;
+
+    padding:50px 20px;
+
+    text-align:center;
+
+    color:var(--muted);
+
+    border:
+        1px solid
+        var(--line);
+
+    border-radius:22px;
+
+    background:
+        rgba(255,255,255,.025);
+}
+
+
+/* =========================================================
+FILE CARD
+========================================================= */
+
+.fileCard{
+
+    overflow:hidden;
+
+    border:
+        1px solid
+        var(--line);
+
+    border-radius:22px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(22,24,39,.8),
+            rgba(10,11,18,.82)
+        );
+
+    box-shadow:
+        0 15px 45px
+        rgba(0,0,0,.2);
+
+    transition:
+        transform .2s ease,
+        border-color .2s ease;
+}
+
+
+.fileCard:hover{
+
+    transform:
+        translateY(-2px);
+
+    border-color:
+        rgba(185,201,255,.18);
+}
+
+
+.preview{
+
+    position:relative;
+
+    height:175px;
+
+    overflow:hidden;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    cursor:pointer;
+
+    background:
+        radial-gradient(
+            circle,
+            rgba(185,201,255,.12),
+            transparent 60%
+        );
+}
+
+
+.preview img{
+
+    width:100%;
+    height:100%;
+
+    object-fit:cover;
+}
+
+
+.preview video{
+
+    width:100%;
+    height:100%;
+
+    object-fit:cover;
+}
+
+
+.previewOverlay{
+
+    position:absolute;
+
+    inset:0;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:center;
+
+    opacity:0;
+
+    background:
+        rgba(0,0,0,.28);
+
+    transition:
+        opacity .2s ease;
+}
+
+
+.preview:hover .previewOverlay{
+    opacity:1;
+}
+
+
+.previewOpen{
+
+    padding:
+        9px 13px;
+
+    border-radius:12px;
+
+    background:
+        rgba(7,8,13,.72);
+
+    border:
+        1px solid
+        rgba(255,255,255,.14);
+
+    color:white;
+
+    font-size:12px;
+
+    font-weight:800;
+
+    backdrop-filter:
+        blur(10px);
+}
+
+
+.fileIcon{
+
+    font-size:55px;
+
+    filter:
+        drop-shadow(
+            0 0 15px
+            rgba(185,201,255,.35)
+        );
+}
+
+
+.fileInfo{
+
+    padding:16px;
+}
+
+
+.fileName{
+
+    margin:0;
+
+    font-size:14px;
+
+    font-weight:800;
+
+    word-break:break-word;
+}
+
+
+.fileMeta{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    gap:10px;
+
+    margin-top:8px;
+
+    color:var(--muted);
+
+    font-size:11px;
+}
+
+
+.fileActions{
+
+    display:grid;
+
+    grid-template-columns:
+        repeat(4,1fr);
+
+    gap:7px;
+
+    margin-top:14px;
+}
+
+
+.fileAction{
+
+    min-width:0;
+
+    padding:10px 6px;
+
+    border-radius:12px;
+
+    cursor:pointer;
+
+    border:
+        1px solid
+        var(--line);
+
+    color:var(--text);
+
+    background:
+        rgba(255,255,255,.04);
+
+    font-weight:700;
+
+    font-size:11px;
+}
+
+
+.fileAction.delete{
+
+    color:#ff9eb9;
+}
+
+
+.fileAction.share{
+
+    color:var(--blue);
+}
+
+
+/* =========================================================
+NO SEARCH RESULTS
+========================================================= */
+
+.noResults{
+
+    grid-column:1/-1;
+
+    padding:45px 20px;
+
+    text-align:center;
+
+    border:
+        1px solid
+        var(--line);
+
+    border-radius:22px;
+
+    background:
+        rgba(255,255,255,.025);
+
+    color:var(--muted);
+}
+
+
+/* =========================================================
+AUTO LOCK INDICATOR
+========================================================= */
+
+.lockStatus{
+
+    margin-top:12px;
+
+    text-align:center;
+
+    color:var(--muted);
+
+    font-size:11px;
+}
+
+
+.lockStatus span{
+
+    color:var(--blue);
+
+    font-weight:800;
+}
+
+
+/* =========================================================
+MODAL
+========================================================= */
+
+#viewer{
+
+    position:fixed;
+
+    inset:0;
+
+    z-index:80;
+
+    display:none;
+
+    align-items:center;
+
+    justify-content:center;
+
+    padding:20px;
+
+    background:
+        rgba(3,4,8,.88);
+
+    backdrop-filter:
+        blur(18px);
+}
+
+
+#viewer.show{
+    display:flex;
+}
+
+
+.viewerBox{
+
+    width:min(
+        1000px,
+        96vw
+    );
+
+    max-height:92vh;
+
+    overflow:auto;
+
+    padding:18px;
+
+    border:
+        1px solid
+        var(--line);
+
+    border-radius:24px;
+
+    background:
+        #0b0d15;
+
+    box-shadow:
+        var(--shadow);
+}
+
+
+.viewerTop{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    gap:15px;
+
+    margin-bottom:14px;
+}
+
+
+.viewerTitle{
+
+    margin:0;
+
+    font-size:14px;
+
+    font-weight:800;
+
+    word-break:break-word;
+}
+
+
+.closeViewer{
+
+    width:38px;
+    height:38px;
+
+    border:0;
+
+    border-radius:12px;
+
+    cursor:pointer;
+
+    background:
+        rgba(255,255,255,.07);
+
+    color:white;
+
+    font-size:18px;
+}
+
+
+#viewerContent{
+
+    width:100%;
+
+    max-height:75vh;
+
+    border-radius:16px;
+
+    overflow:hidden;
+}
+
+
+#viewerContent img{
+
+    display:block;
+
+    width:100%;
+
+    max-height:75vh;
+
+    object-fit:contain;
+}
+
+
+#viewerContent video{
+
+    width:100%;
+
+    max-height:75vh;
+}
+
+
+#viewerContent iframe{
+
+    width:100%;
+
+    height:75vh;
+
+    border:0;
+}
+
+
+#viewerContent audio{
+
+    width:100%;
+}
+
+
+/* =========================================================
+LOCK OVERLAY
+========================================================= */
+
+#autoLockOverlay{
+
+    position:fixed;
+
+    inset:0;
+
+    z-index:150;
+
+    display:none;
+
+    align-items:center;
+
+    justify-content:center;
+
+    padding:20px;
+
+    background:
+        radial-gradient(
+            circle at center,
+            rgba(20,24,50,.95),
+            rgba(4,5,10,.99)
+        );
+
+    backdrop-filter:
+        blur(24px);
+}
+
+
+#autoLockOverlay.show{
+    display:flex;
+}
+
+
+.autoLockBox{
+
+    width:min(
+        430px,
+        94vw
+    );
+
+    padding:32px;
+
+    text-align:center;
+
+    border:
+        1px solid
+        var(--line);
+
+    border-radius:28px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(25,28,45,.9),
+            rgba(10,11,18,.92)
+        );
+
+    box-shadow:
+        var(--shadow);
+}
+
+
+.autoLockIcon{
+
+    width:70px;
+    height:70px;
+
+    margin:0 auto 18px;
+
+    display:grid;
+
+    place-items:center;
+
+    border-radius:22px;
+
+    font-size:30px;
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(185,201,255,.18),
+            rgba(243,180,207,.12)
+        );
+
+    border:
+        1px solid
+        var(--line);
+
+    box-shadow:
+        0 0 35px
+        rgba(185,201,255,.1);
+}
+
+
+.autoLockTitle{
+
+    margin:0;
+
+    font-size:25px;
+
+    font-weight:900;
+}
+
+
+.autoLockText{
+
+    margin:
+        9px
+        0
+        22px;
+
+    color:var(--muted);
+
+    font-size:13px;
+
+    line-height:1.5;
+}
+
+
+/* =========================================================
+RESPONSIVE
+========================================================= */
+
+@media(max-width:650px){
+
+    #app{
+        padding-left:12px;
+        padding-right:12px;
+    }
+
+    .loginCard{
+        padding:25px;
+    }
+
+    .storageTop{
+        align-items:flex-start;
+    }
+
+    .storageNumber{
+        font-size:22px;
+    }
+
+    .storagePercent{
+        font-size:20px;
+    }
+
+    .storageBreakdown{
+        grid-template-columns:1fr;
+    }
+
+    #fileList{
+        grid-template-columns:1fr;
+    }
+
+    .preview{
+        height:190px;
+    }
+
+    .fileActions{
+        grid-template-columns:
+            repeat(2,1fr);
+    }
+
+    .filesHeader{
+        align-items:flex-start;
+    }
+}
+
+</style>
+
+</head>
+
+
+<body>
+
+
+<canvas id="spaceCanvas"></canvas>
+
+
+<!-- =======================================================
+INTRO
+======================================================= -->
+
+<section id="introScreen">
+
+    <div class="introContent">
+
+        <div class="introLogo">
+            ✦
+        </div>
+
+        <h1 class="introWelcome">
+            Welcome
+        </h1>
+
+        <p class="introSub">
+            My Personal Cloud
+        </p>
+
+        <div class="loadingLine"></div>
+
+    </div>
+
+</section>
+
+
+<!-- =======================================================
+APP
+======================================================= -->
+
+<main id="app">
+
+
+    <!-- LOGIN -->
+
+    <section
+        id="loginWrap"
+        class="loginWrap"
+    >
+
+        <div class="loginCard">
+
+            <h1 class="loginTitle">
+                My Personal Cloud
+            </h1>
+
+            <p class="loginText">
+                Your private cloud storage
+            </p>
+
+            <input
+                id="password"
+                type="password"
+                placeholder="Enter password"
+                autocomplete="current-password"
+            >
+
+            <button
+                id="loginButton"
+                class="primary"
+            >
+                Unlock Cloud
+            </button>
+
+            <div
+                id="loginError"
+                class="errorText"
+            ></div>
+
+        </div>
+
+    </section>
+
+
+    <!-- DASHBOARD -->
+
+    <section
+        id="dashboard"
+        class="dashboard"
+    >
+
+        <header class="topbar">
+
+            <div class="brand">
+
+                <div class="brandLogo">
+                    ✦
+                </div>
+
+                <div>
+
+                    <h1 class="brandTitle">
+                        My Personal Cloud
+                    </h1>
+
+                    <p class="brandStatus">
+                        ● Secure storage online
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <button
+                id="logoutButton"
+                class="logout"
+            >
+                Logout
+            </button>
+
+        </header>
+
+
+        <!-- STORAGE -->
+
+        <section class="storageCard">
+
+            <div class="storageTop">
+
+                <div>
+
+                    <div class="storageLabel">
+                        Cloud Storage
+                    </div>
+
+                    <div
+                        id="storageNumber"
+                        class="storageNumber"
+                    >
+                        0 B / 10 GB
+                    </div>
+
+                </div>
+
+                <div
+                    id="storagePercent"
+                    class="storagePercent"
+                >
+                    0%
+                </div>
+
+            </div>
+
+
+            <div class="progress">
+
+                <div
+                    id="storageBar"
+                    class="progressBar"
+                ></div>
+
+            </div>
+
+
+            <div class="storageBottom">
+
+                <span id="storageUsed">
+                    Used: 0 B
+                </span>
+
+                <span id="storageRemaining">
+                    Free: 10 GB
+                </span>
+
+            </div>
+
+
+            <div class="storageBreakdown">
+
+                <div class="breakdownItem">
+
+                    <div class="breakdownLabel">
+                        Images
+                    </div>
+
+                    <div
+                        id="imageStorage"
+                        class="breakdownValue"
+                    >
+                        0 B
+                    </div>
+
+                </div>
+
+
+                <div class="breakdownItem">
+
+                    <div class="breakdownLabel">
+                        Videos
+                    </div>
+
+                    <div
+                        id="videoStorage"
+                        class="breakdownValue"
+                    >
+                        0 B
+                    </div>
+
+                </div>
+
+
+                <div class="breakdownItem">
+
+                    <div class="breakdownLabel">
+                        Documents
+                    </div>
+
+                    <div
+                        id="documentStorage"
+                        class="breakdownValue"
+                    >
+                        0 B
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- UPLOAD -->
+
+        <section class="uploadCard">
+
+            <label
+                class="uploadButton"
+                for="fileInput"
+            >
+                + Select Files
+            </label>
+
+            <input
+                id="fileInput"
+                type="file"
+                multiple
+                webkitdirectory
+            >
+
+            <button
+                id="uploadSelectedButton"
+                class="primary"
+                type="button"
+            >
+                Upload Selected
+            </button>
+
+            <p class="uploadHint">
+                Select files or a folder first, then press Upload Selected
+            </p>
+
+            <div id="uploadQueue"></div>
+
+        </section>
+
+
+        <!-- FILES -->
+
+        <div class="filesHeader">
+
+            <h2 class="filesTitle">
+                Your Files
+            </h2>
+
+            <button
+                id="refreshButton"
+                class="refresh"
+            >
+                Refresh
+            </button>
+
+        </div>
+
+
+        <!-- SEARCH + FILTER -->
+
+        <div class="fileToolbar">
+
+            <div class="searchBox">
+
+                <span class="searchIcon">
+                    🔎
+                </span>
+
+                <input
+                    id="searchInput"
+                    class="searchInput"
+                    type="search"
+                    placeholder="Search your files..."
+                    autocomplete="off"
+                >
+
+            </div>
+
+
+            <div class="filterRow">
+
+                <button
+                    class="filterButton active"
+                    data-filter="all"
+                >
+                    All
+                </button>
+
+                <button
+                    class="filterButton"
+                    data-filter="image"
+                >
+                    Images
+                </button>
+
+                <button
+                    class="filterButton"
+                    data-filter="video"
+                >
+                    Videos
+                </button>
+
+                <button
+                    class="filterButton"
+                    data-filter="document"
+                >
+                    Documents
+                </button>
+
+                <button
+                    class="filterButton"
+                    data-filter="audio"
+                >
+                    Audio
+                </button>
+
+                <button
+                    class="filterButton"
+                    data-filter="other"
+                >
+                    Other
+                </button>
+
+            </div>
+
+        </div>
+
+
+        <section id="fileList"></section>
+
+        <div class="lockStatus">
+            Auto-lock after inactivity:
+            <span id="lockCountdown">
+                15:00
+            </span>
+        </div>
+
+    </section>
+
+</main>
+
+
+<!-- =======================================================
+VIEWER
+======================================================= -->
+
+<section id="viewer">
+
+    <div class="viewerBox">
+
+        <div class="viewerTop">
+
+            <h3
+                id="viewerTitle"
+                class="viewerTitle"
+            ></h3>
+
+            <button
+                id="closeViewer"
+                class="closeViewer"
+            >
+                ×
+            </button>
+
+        </div>
+
+        <div id="viewerContent"></div>
+
+    </div>
+
+</section>
+
+
+<!-- =======================================================
+AUTO LOCK
+======================================================= -->
+
+<section id="autoLockOverlay">
+
+    <div class="autoLockBox">
+
+        <div class="autoLockIcon">
+            🔒
+        </div>
+
+        <h2 class="autoLockTitle">
+            Cloud Locked
+        </h2>
+
+        <p class="autoLockText">
+            Your cloud was automatically locked
+            because there was no activity for a while.
+        </p>
+
+        <button
+            id="unlockAgainButton"
+            class="primary"
+        >
+            Unlock Cloud
+        </button>
+
+    </div>
+
+</section>
+
+
+<script>
+
+/* =========================================================
+ELEMENTS
+========================================================= */
+
+const intro =
+    document.getElementById(
+        "introScreen"
+    );
+
+const loginWrap =
+    document.getElementById(
+        "loginWrap"
+    );
+
+const dashboard =
+    document.getElementById(
+        "dashboard"
+    );
+
+const password =
+    document.getElementById(
+        "password"
+    );
+
+const loginButton =
+    document.getElementById(
+        "loginButton"
+    );
+
+const loginError =
+    document.getElementById(
+        "loginError"
+    );
+
+const logoutButton =
+    document.getElementById(
+        "logoutButton"
+    );
+
+const fileInput =
+    document.getElementById(
+        "fileInput"
+    );
+
+const fileList =
+    document.getElementById(
+        "fileList"
+    );
+
+const uploadQueue =
+    document.getElementById(
+        "uploadQueue"
+    );
+
+const uploadSelectedButton =
+    document.getElementById(
+        "uploadSelectedButton"
+    );
+
+const storageNumber =
+    document.getElementById(
+        "storageNumber"
+    );
+
+const storagePercent =
+    document.getElementById(
+        "storagePercent"
+    );
+
+const storageBar =
+    document.getElementById(
+        "storageBar"
+    );
+
+const storageUsed =
+    document.getElementById(
+        "storageUsed"
+    );
+
+const storageRemaining =
+    document.getElementById(
+        "storageRemaining"
+    );
+
+const imageStorage =
+    document.getElementById(
+        "imageStorage"
+    );
+
+const videoStorage =
+    document.getElementById(
+        "videoStorage"
+    );
+
+const documentStorage =
+    document.getElementById(
+        "documentStorage"
+    );
+
+const searchInput =
+    document.getElementById(
+        "searchInput"
+    );
+
+const lockCountdown =
+    document.getElementById(
+        "lockCountdown"
+    );
+
+const autoLockOverlay =
+    document.getElementById(
+        "autoLockOverlay"
+    );
+
+const unlockAgainButton =
+    document.getElementById(
+        "unlockAgainButton"
+    );
+
+
+/* =========================================================
+GLOBAL FILE STATE
+========================================================= */
+
+let allFiles = [];
+
+let currentFilter =
+    "all";
+
+let currentSearch =
+    "";
+
+let selectedFiles = [];
+
+
+/* =========================================================
+API
+========================================================= */
+
+async function api(
+    url,
+    options = {}
+){
+
+    const response =
+        await fetch(
+            url,
+            {
+                credentials:"same-origin",
+                ...options
+            }
+        );
+
+
+    let data = null;
+
+    try{
+
+        data =
+            await response.json();
+
+    }catch(_){}
+
+
+    if(
+        response.status === 401
+    ){
+
+        showLogin();
+
+        throw new Error(
+            "Authentication required"
+        );
+    }
+
+
+    if(
+        !response.ok
+    ){
+
+        throw new Error(
+            data?.error ||
+            "Request failed"
+        );
+    }
+
+
+    return data;
+}
+
+
+/* =========================================================
+LOGIN
+========================================================= */
+
+async function checkLogin(){
+
+    try{
+
+        const result =
+            await api(
+                "/api/auth/me"
+            );
+
+
+        if(
+            result.authenticated
+        ){
+
+            showDashboard();
+
+        }else{
+
+            showLogin();
+        }
+
+    }catch(_){
+
+        showLogin();
+    }
+}
+
+
+function showLogin(){
+
+    autoLockOverlay.classList.remove(
+        "show"
+    );
+
+    loginWrap.classList.add(
+        "show"
+    );
+
+    dashboard.classList.remove(
+        "show"
+    );
+
+    stopAutoLock();
+
+    setTimeout(
+        () => password.focus(),
+        100
+    );
+}
+
+
+function showDashboard(){
+
+    loginWrap.classList.remove(
+        "show"
+    );
+
+    autoLockOverlay.classList.remove(
+        "show"
+    );
+
+    dashboard.classList.add(
+        "show"
+    );
+
+    resetAutoLock();
+
+    loadEverything();
+}
+
+
+loginButton.addEventListener(
+    "click",
+    login
+);
+
+
+password.addEventListener(
+    "keydown",
+    event => {
+
+        if(
+            event.key === "Enter"
+        ){
+
+            login();
+        }
+    }
+);
+
+
+async function login(){
+
+    loginError.textContent =
+        "";
+
+    loginButton.disabled =
+        true;
+
+    loginButton.textContent =
+        "Unlocking...";
+
+
+    try{
+
+        await api(
+            "/api/auth/login",
+            {
+                method:"POST",
+
+                headers:{
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify({
+                        password:
+                            password.value
+                    })
+            }
+        );
+
+
+        password.value =
+            "";
+
+        showDashboard();
+
+    }catch(error){
+
+        loginError.textContent =
+            error.message;
+
+    }finally{
+
+        loginButton.disabled =
+            false;
+
+        loginButton.textContent =
+            "Unlock Cloud";
+    }
+}
+
+
+/* =========================================================
+LOGOUT
+========================================================= */
+
+logoutButton.addEventListener(
+    "click",
+    async () => {
+
+        try{
+
+            await api(
+                "/api/auth/logout",
+                {
+                    method:"POST"
+                }
+            );
+
+        }finally{
+
+            showLogin();
+        }
+    }
+);
+
+
+/* =========================================================
+STORAGE
+========================================================= */
+
+async function loadStorage(){
+
+    const data =
+        await api(
+            "/api/storage"
+        );
+
+
+    storageNumber.textContent =
+        `${data.usedText} / ${data.limitText}`;
+
+
+    storagePercent.textContent =
+        `${data.usedPercent}%`;
+
+
+    storageBar.style.width =
+        `${data.usedPercent}%`;
+
+
+    storageUsed.textContent =
+        `Used: ${data.usedText}`;
+
+
+    storageRemaining.textContent =
+        `Free: ${data.remainingText}`;
+}
+
+
+/* =========================================================
+STORAGE BREAKDOWN
+========================================================= */
+
+function updateStorageBreakdown(files){
+
+    let images = 0;
+    let videos = 0;
+    let documents = 0;
+
+
+    for(
+        const file of files
+    ){
+
+        const type =
+            String(
+                file.type || ""
+            ).toLowerCase();
+
+
+        const size =
+            Number(
+                file.size || 0
+            );
+
+
+        if(
+            type.startsWith("image/")
+        ){
+
+            images += size;
+
+        }else if(
+            type.startsWith("video/")
+        ){
+
+            videos += size;
+
+        }else{
+
+            documents += size;
+        }
+    }
+
+
+    imageStorage.textContent =
+        formatBytes(images);
+
+    videoStorage.textContent =
+        formatBytes(videos);
+
+    documentStorage.textContent =
+        formatBytes(documents);
+}
+
+
+/* =========================================================
+FILES
+========================================================= */
+
+async function loadFiles(){
+
+    fileList.innerHTML =
+        `
+        <div class="empty">
+            Loading your cloud...
+        </div>
+        `;
+
+
+    try{
+
+        const files =
+            await api(
+                "/api/files"
+            );
+
+
+        allFiles =
+            Array.isArray(files)
+                ? files
+                : [];
+
+
+        updateStorageBreakdown(
+            allFiles
+        );
+
+
+        renderFilteredFiles();
+
+    }catch(error){
+
+        fileList.innerHTML =
+            `
+            <div class="empty">
+                ${escapeHtml(
+                    error.message
+                )}
+            </div>
+            `;
+    }
+}
+
+
+/* =========================================================
+SEARCH + FILTER
+========================================================= */
+
+searchInput.addEventListener(
+    "input",
+    () => {
+
+        currentSearch =
+            searchInput.value
+                .trim()
+                .toLowerCase();
+
+        renderFilteredFiles();
+    }
+);
+
+
+document
+    .querySelectorAll(
+        ".filterButton"
+    )
+    .forEach(
+        button => {
+
+            button.addEventListener(
+                "click",
+                () => {
+
+                    document
+                        .querySelectorAll(
+                            ".filterButton"
+                        )
+                        .forEach(
+                            item =>
+                                item.classList.remove(
+                                    "active"
+                                )
+                        );
+
+
+                    button.classList.add(
+                        "active"
+                    );
+
+
+                    currentFilter =
+                        button.dataset.filter ||
+                        "all";
+
+
+                    renderFilteredFiles();
+                }
+            );
+        }
+    );
+
+
+function matchesFilter(file){
+
+    const type =
+        String(
+            file.type || ""
+        ).toLowerCase();
+
+
+    if(
+        currentFilter === "all"
+    ){
+
+        return true;
+    }
+
+
+    if(
+        currentFilter === "image"
+    ){
+
+        return type.startsWith(
+            "image/"
+        );
+    }
+
+
+    if(
+        currentFilter === "video"
+    ){
+
+        return type.startsWith(
+            "video/"
+        );
+    }
+
+
+    if(
+        currentFilter === "audio"
+    ){
+
+        return type.startsWith(
+            "audio/"
+        );
+    }
+
+
+    if(
+        currentFilter === "document"
+    ){
+
+        return (
+            type.includes("pdf") ||
+            type.includes("word") ||
+            type.includes("document") ||
+            type.includes("text") ||
+            type.includes("spreadsheet") ||
+            type.includes("presentation") ||
+            type.includes("excel") ||
+            type.includes("powerpoint")
+        );
+    }
+
+
+    if(
+        currentFilter === "other"
+    ){
+
+        return (
+            !type.startsWith("image/") &&
+            !type.startsWith("video/") &&
+            !type.startsWith("audio/") &&
+            !type.includes("pdf") &&
+            !type.includes("word") &&
+            !type.includes("document") &&
+            !type.includes("text") &&
+            !type.includes("spreadsheet") &&
+            !type.includes("presentation") &&
+            !type.includes("excel") &&
+            !type.includes("powerpoint")
+        );
+    }
+
+
+    return true;
+}
+
+
+function matchesSearch(file){
+
+    if(
+        !currentSearch
+    ){
+
+        return true;
+    }
+
+
+    const name =
+        String(
+            file.name || ""
+        ).toLowerCase();
+
+
+    const type =
+        String(
+            file.type || ""
+        ).toLowerCase();
+
+
+    return (
+        name.includes(
+            currentSearch
+        ) ||
+        type.includes(
+            currentSearch
+        )
+    );
+}
+
+
+function renderFilteredFiles(){
+
+    const filtered =
+        allFiles.filter(
+            file =>
+                matchesFilter(file) &&
+                matchesSearch(file)
+        );
+
+
+    if(
+        !allFiles.length
+    ){
+
+        fileList.innerHTML =
+            `
+            <div class="empty">
+                No files yet.<br>
+                Upload your first file.
+            </div>
+            `;
+
+        return;
+    }
+
+
+    if(
+        !filtered.length
+    ){
+
+        fileList.innerHTML =
+            `
+            <div class="noResults">
+                No files found.<br>
+                Try another search or category.
+            </div>
+            `;
+
+        return;
+    }
+
+
+    fileList.innerHTML =
+        "";
+
+
+    for(
+        const file of filtered
+    ){
+
+        fileList.appendChild(
+            createFileCard(file)
+        );
+    }
+}
+
+
+/* =========================================================
+FILE CARD
+========================================================= */
+
+function createFileCard(file){
+
+    const card =
+        document.createElement(
+            "article"
+        );
+
+    card.className =
+        "fileCard";
+
+
+    const preview =
+        document.createElement(
+            "div"
+        );
+
+    preview.className =
+        "preview";
+
+
+    const type =
+        String(
+            file.type || ""
+        );
+
+
+    if(
+        type.startsWith("image/")
+    ){
+
+        const img =
+            document.createElement(
+                "img"
+            );
+
+        img.src =
+            streamUrl(file.name);
+
+        img.loading =
+            "lazy";
+
+        preview.appendChild(
+            img
+        );
+
+    }else if(
+        type.startsWith("video/")
+    ){
+
+        const video =
+            document.createElement(
+                "video"
+            );
+
+        video.src =
+            streamUrl(file.name);
+
+        video.muted =
+            true;
+
+        video.preload =
+            "metadata";
+
+        video.playsInline =
+            true;
+
+        preview.appendChild(
+            video
+        );
+
+    }else{
+
+        const icon =
+            document.createElement(
+                "div"
+            );
+
+        icon.className =
+            "fileIcon";
+
+        icon.textContent =
+            iconFor(type);
+
+        preview.appendChild(
+            icon
+        );
+    }
+
+
+    const previewOverlay =
+        document.createElement(
+            "div"
+        );
+
+    previewOverlay.className =
+        "previewOverlay";
+
+
+    const previewOpen =
+        document.createElement(
+            "div"
+        );
+
+    previewOpen.className =
+        "previewOpen";
+
+    previewOpen.textContent =
+        canPreview(type)
+            ? "Tap to Preview"
+            : "File Info";
+
+
+    previewOverlay.appendChild(
+        previewOpen
+    );
+
+    preview.appendChild(
+        previewOverlay
+    );
+
+
+    preview.addEventListener(
+        "click",
+        () => {
+
+            if(
+                canPreview(type)
+            ){
+
+                openViewer(file);
+
+            }else{
+
+                downloadFile(
+                    file.name
+                );
+            }
+        }
+    );
+
+
+    const info =
+        document.createElement(
+            "div"
+        );
+
+    info.className =
+        "fileInfo";
+
+
+    const name =
+        document.createElement(
+            "p"
+        );
+
+    name.className =
+        "fileName";
+
+    name.textContent =
+        file.name;
+
+
+    const meta =
+        document.createElement(
+            "div"
+        );
+
+    meta.className =
+        "fileMeta";
+
+
+    const size =
+        document.createElement(
+            "span"
+        );
+
+    size.textContent =
+        file.sizeText ||
+        formatBytes(
+            Number(
+                file.size || 0
+            )
+        );
+
+
+    const date =
+        document.createElement(
+            "span"
+        );
+
+    date.textContent =
+        file.modified
+            ? new Date(
+                file.modified
+            ).toLocaleDateString()
+            : "";
+
+
+    meta.append(
+        size,
+        date
+    );
+
+
+    const actions =
+        document.createElement(
+            "div"
+        );
+
+    actions.className =
+        "fileActions";
+
+
+    const open =
+        document.createElement(
+            "button"
+        );
+
+    open.className =
+        "fileAction";
+
+    open.textContent =
+        canPreview(type)
+            ? "Open"
+            : "Info";
+
+    open.addEventListener(
+        "click",
+        () => {
+
+            if(
+                canPreview(type)
+            ){
+
+                openViewer(file);
+
+            }else{
+
+                downloadFile(
+                    file.name
+                );
+            }
+        }
+    );
+
+
+    const download =
+        document.createElement(
+            "button"
+        );
+
+    download.className =
+        "fileAction";
+
+    download.textContent =
+        "Download";
+
+    download.addEventListener(
+        "click",
+        () =>
+            downloadFile(
+                file.name
+            )
+    );
+
+
+    const share =
+        document.createElement(
+            "button"
+        );
+
+    share.className =
+        "fileAction share";
+
+    share.textContent =
+        "Share";
+
+    share.addEventListener(
+        "click",
+        () =>
+            shareFile(file)
+    );
+
+
+    const del =
+        document.createElement(
+            "button"
+        );
+
+    del.className =
+        "fileAction delete";
+
+    del.textContent =
+        "Delete";
+
+    del.addEventListener(
+        "click",
+        () =>
+            deleteFile(
+                file.name
+            )
+    );
+
+
+    actions.append(
+        open,
+        download,
+        share,
+        del
+    );
+
+
+    info.append(
+        name,
+        meta,
+        actions
+    );
+
+
+    card.append(
+        preview,
+        info
+    );
+
+
+    return card;
+}
+
+
+/* =========================================================
+PREVIEW
+========================================================= */
+
+function canPreview(type){
+
+    return (
+        type.startsWith("image/") ||
+        type.startsWith("video/") ||
+        type === "application/pdf" ||
+        type.startsWith("audio/")
+    );
+}
+
+
+function iconFor(type){
+
+    if(type.startsWith("video/"))
+        return "🎬";
+
+    if(type.startsWith("audio/"))
+        return "🎵";
+
+    if(type === "application/pdf")
+        return "📕";
+
+    if(type.includes("zip"))
+        return "🗜️";
+
+    if(type.includes("word"))
+        return "📄";
+
+    if(type.includes("spreadsheet"))
+        return "📊";
+
+    if(type.includes("presentation"))
+        return "📑";
+
+    if(type.includes("text"))
+        return "📝";
+
+    return "📦";
+}
+
+
+function streamUrl(name){
+
+    return (
+        "/api/stream/" +
+        name
+            .split("/")
+            .map(
+                encodeURIComponent
+            )
+            .join("/")
+    );
+}
+
+
+function downloadUrl(name){
+
+    return (
+        "/api/download/" +
+        name
+            .split("/")
+            .map(
+                encodeURIComponent
+            )
+            .join("/")
+    );
+}
+
+
+function downloadFile(name){
+
+    const a =
+        document.createElement(
+            "a"
+        );
+
+    a.href =
+        downloadUrl(name);
+
+    a.download =
+        name.split("/").pop();
+
+    a.rel =
+        "noopener";
+
+    document.body.appendChild(
+        a
+    );
+
+    a.click();
+
+    a.remove();
+}
+
+
+/* =========================================================
+REAL FILE SHARE
+========================================================= */
+
+async function shareFile(file){
+
+    const fileName =
+        String(
+            file.name || "file"
+        );
+
+
+    const type =
+        String(
+            file.type || ""
+        ) ||
+        "application/octet-stream";
+
+
+    const stream =
+        streamUrl(
+            fileName
+        );
+
+
+    /*
+     * First try to share the actual file.
+     */
+
+    try{
+
+        const response =
+            await fetch(
+                stream,
+                {
+                    credentials:
+                        "same-origin"
+                }
+            );
+
+
+        if(
+            response.ok
+        ){
+
+            const blob =
+                await response.blob();
+
+
+            const sharedFile =
+                new File(
+                    [blob],
+                    fileName,
+                    {
+                        type:
+                            blob.type ||
+                            type
+                    }
+                );
+
+
+            if(
+                navigator.share &&
+                navigator.canShare &&
+                navigator.canShare({
+                    files:[
+                        sharedFile
+                    ]
+                })
+            ){
+
+                await navigator.share({
+
+                    files:[
+                        sharedFile
+                    ],
+
+                    title:
+                        fileName,
+
+                    text:
+                        "File from My Personal Cloud"
+                });
+
+
+                return;
+            }
+        }
+
+    }catch(error){
+
+        if(
+            error?.name ===
+            "AbortError"
+        ){
+
+            return;
+        }
+
+
+        console.warn(
+            "Direct file sharing unavailable:",
+            error
+        );
+    }
+
+
+    /*
+     * Fallback to native link sharing.
+     */
+
+    const url =
+        new URL(
+            stream,
+            window.location.origin
+        ).href;
+
+
+    try{
+
+        if(
+            navigator.share
+        ){
+
+            await navigator.share({
+
+                title:
+                    fileName,
+
+                text:
+                    "File from My Personal Cloud",
+
+                url
+            });
+
+            return;
+        }
+
+
+        if(
+            navigator.clipboard &&
+            window.isSecureContext
+        ){
+
+            await navigator.clipboard.writeText(
+                url
+            );
+
+            alert(
+                "File link copied to clipboard."
+            );
+
+            return;
+        }
+
+
+        const temp =
+            document.createElement(
+                "textarea"
+            );
+
+
+        temp.value =
+            url;
+
+
+        document.body.appendChild(
+            temp
+        );
+
+
+        temp.select();
+
+
+        document.execCommand(
+            "copy"
+        );
+
+
+        temp.remove();
+
+
+        alert(
+            "File link copied to clipboard."
+        );
+
+    }catch(error){
+
+        if(
+            error?.name ===
+            "AbortError"
+        ){
+
+            return;
+        }
+
+
+        alert(
+            "Unable to share this file."
+        );
+    }
+}
+
+
+/* =========================================================
+VIEWER
+========================================================= */
+
+const viewer =
+    document.getElementById(
+        "viewer"
+    );
+
+const viewerTitle =
+    document.getElementById(
+        "viewerTitle"
+    );
+
+const viewerContent =
+    document.getElementById(
+        "viewerContent"
+    );
+
+
+document
+    .getElementById(
+        "closeViewer"
+    )
+    .addEventListener(
+        "click",
+        closeViewer
+    );
+
+
+viewer.addEventListener(
+    "click",
+    event => {
+
+        if(
+            event.target === viewer
+        ){
+
+            closeViewer();
+        }
+    }
+);
+
+
+function openViewer(file){
+
+    viewerTitle.textContent =
+        file.name;
+
+    viewerContent.innerHTML =
+        "";
+
+
+    const type =
+        String(
+            file.type || ""
+        );
+
+
+    const url =
+        streamUrl(
+            file.name
+        );
+
+
+    if(
+        type.startsWith("image/")
+    ){
+
+        const img =
+            document.createElement(
+                "img"
+            );
+
+        img.src =
+            url;
+
+        img.alt =
+            file.name;
+
+        viewerContent.appendChild(
+            img
+        );
+
+    }else if(
+        type.startsWith("video/")
+    ){
+
+        const video =
+            document.createElement(
+                "video"
+            );
+
+        video.src =
+            url;
+
+        video.controls =
+            true;
+
+        video.autoplay =
+            false;
+
+        video.playsInline =
+            true;
+
+        viewerContent.appendChild(
+            video
+        );
+
+    }else if(
+        type.startsWith("audio/")
+    ){
+
+        const audio =
+            document.createElement(
+                "audio"
+            );
+
+        audio.src =
+            url;
+
+        audio.controls =
+            true;
+
+        viewerContent.appendChild(
+            audio
+        );
+
+    }else if(
+        type === "application/pdf"
+    ){
+
+        const iframe =
+            document.createElement(
+                "iframe"
+            );
+
+        iframe.src =
+            url;
+
+        iframe.title =
+            file.name;
+
+        viewerContent.appendChild(
+            iframe
+        );
+
+    }
+
+
+    viewer.classList.add(
+        "show"
+    );
+}
+
+
+function closeViewer(){
+
+    viewer.classList.remove(
+        "show"
+    );
+
+    viewerContent.innerHTML =
+        "";
+}
+
+
+/* =========================================================
+DELETE
+========================================================= */
+
+async function deleteFile(name){
+
+    const ok =
+        confirm(
+            `Delete "${name}" permanently?`
+        );
+
+
+    if(!ok){
+        return;
+    }
+
+
+    try{
+
+        await api(
+            "/api/files",
+            {
+                method:"DELETE",
+
+                headers:{
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify({
+                        name
+                    })
+            }
+        );
+
+
+        await loadEverything();
+
+    }catch(error){
+
+        alert(
+            error.message
+        );
+    }
+}
+
+
+/* =========================================================
+SELECT FILES
+========================================================= */
+
+fileInput.addEventListener(
+    "change",
+    event => {
+
+        selectedFiles =
+            Array.from(
+                event.target.files || []
+            );
+
+
+        if(
+            !selectedFiles.length
+        ){
+
+            uploadSelectedButton.style.display =
+                "none";
+
+            uploadQueue.innerHTML =
+                "";
+
+            return;
+        }
+
+
+        uploadQueue.innerHTML =
+            "";
+
+
+        for(
+            const file of selectedFiles
+        ){
+
+            createQueueItem(
+                file
+            );
+        }
+
+
+        uploadSelectedButton.style.display =
+            "inline-flex";
+
+
+        uploadSelectedButton.textContent =
+            `Upload Selected (${selectedFiles.length})`;
+    }
+);
+
+
+/* =========================================================
+UPLOAD SELECTED
+========================================================= */
+
+uploadSelectedButton.addEventListener(
+    "click",
+    async () => {
+
+        if(
+            !selectedFiles.length
+        ){
+
+            return;
+        }
+
+
+        const filesToUpload =
+            [...selectedFiles];
+
+
+        uploadSelectedButton.disabled =
+            true;
+
+        uploadSelectedButton.textContent =
+            "Uploading...";
+
+
+        try{
+
+            for(
+                const file of filesToUpload
+            ){
+
+                try{
+
+                    await uploadFile(
+                        file
+                    );
+
+                }catch(error){
+
+                    console.error(
+                        error
+                    );
+
+                    alert(
+                        `${file.name}: ${error.message}`
+                    );
+                }
+            }
+
+
+            selectedFiles =
+                [];
+
+            fileInput.value =
+                "";
+
+            uploadSelectedButton.style.display =
+                "none";
+
+
+            await loadEverything();
+
+        }finally{
+
+            uploadSelectedButton.disabled =
+                false;
+
+            if(
+                selectedFiles.length
+            ){
+
+                uploadSelectedButton.textContent =
+                    `Upload Selected (${selectedFiles.length})`;
+            }
+        }
+    }
+);
+
+
+/* =========================================================
+UPLOAD ONE FILE
+========================================================= */
+
+const CHUNK_SIZE =
+    100 * 1024 * 1024;
+
+
+async function uploadFile(file){
+
+    const total =
+        Math.max(
+            1,
+            Math.ceil(
+                file.size /
+                CHUNK_SIZE
+            )
+        );
+
+
+    const id =
+        cryptoRandomId();
+
+
+    /*
+     * Find the existing queue item
+     * for this selected file.
+     */
+
+    const queue =
+        findQueueItem(
+            file
+        );
+
+
+    let uploaded =
+        0;
+
+
+    for(
+        let index = 0;
+        index < total;
+        index++
+    ){
+
+        const start =
+            index *
+            CHUNK_SIZE;
+
+        const end =
+            Math.min(
+                file.size,
+                start +
+                CHUNK_SIZE
+            );
+
+
+        const blob =
+            file.slice(
+                start,
+                end
+            );
+
+
+        const params =
+            new URLSearchParams({
+
+                id,
+
+                index:
+                    String(index),
+
+                total:
+                    String(total),
+
+                size:
+                    String(file.size),
+
+                name:
+                    file.name,
+
+                relativePath:
+                    file.webkitRelativePath ||
+                    file.name
+            });
+
+
+        const response =
+            await fetch(
+                "/api/upload-chunk?" +
+                params.toString(),
+                {
+
+                    method:"POST",
+
+                    credentials:
+                        "same-origin",
+
+                    headers:{
+                        "Content-Type":
+                            "application/octet-stream",
+
+                        "Content-Length":
+                            String(
+                                blob.size
+                            )
+                    },
+
+                    body:blob
+                }
+            );
+
+
+        let data = null;
+
+        try{
+
+            data =
+                await response.json();
+
+        }catch(_){}
+
+
+        if(
+            response.status === 401
+        ){
+
+            showLogin();
+
+            throw new Error(
+                "Session expired"
+            );
+        }
+
+
+        if(
+            !response.ok
+        ){
+
+            throw new Error(
+                data?.error ||
+                "Upload failed"
+            );
+        }
+
+
+        uploaded +=
+            blob.size;
+
+
+        updateQueue(
+            queue,
+            file,
+            file.size > 0
+                ? uploaded /
+                    file.size *
+                    100
+                : 100
+        );
+    }
+
+
+    updateQueue(
+        queue,
+        file,
+        100,
+        true
+    );
+}
+
+
+/* =========================================================
+UPLOAD UI
+========================================================= */
+
+function createQueueItem(file){
+
+    const item =
+        document.createElement(
+            "div"
+        );
+
+    item.className =
+        "queueItem";
+
+
+    item.dataset.fileName =
+        file.name;
+
+
+    const top =
+        document.createElement(
+            "div"
+        );
+
+    top.className =
+        "queueTop";
+
+
+    const name =
+        document.createElement(
+            "div"
+        );
+
+    name.className =
+        "queueName";
+
+    name.textContent =
+        file.webkitRelativePath ||
+        file.name;
+
+
+    const percent =
+        document.createElement(
+            "div"
+        );
+
+    percent.className =
+        "queuePercent";
+
+    percent.textContent =
+        "Waiting";
+
+
+    top.append(
+        name,
+        percent
+    );
+
+
+    const track =
+        document.createElement(
+            "div"
+        );
+
+    track.className =
+        "queueProgress";
+
+
+    const bar =
+        document.createElement(
+            "div"
+        );
+
+
+    track.appendChild(
+        bar
+    );
+
+
+    item.append(
+        top,
+        track
+    );
+
+
+    uploadQueue.appendChild(
+        item
+    );
+
+
+    return {
+        item,
+        percent,
+        bar
     };
-
-    res.json({
-      ok: true,
-      file: publicFile(renamed)
-    });
-  } catch (error) {
-    console.error("RENAME ERROR:", error?.stack || error);
-    return jsonError(res, 500, error?.message || "Rename failed");
-  }
-});
-
-/* =========================
-   SHARE
-========================= */
-function createShareToken(name) {
-  const exp = Math.floor(Date.now() / 1000) + SHARE_TTL_SECONDS;
-  return signPayload({ type: "share", n: cleanName(name), exp, nonce: crypto.randomBytes(8).toString("hex") });
 }
 
-app.post("/api/share", requireAuth, async (req, res) => {
-  try {
-    const name = cleanName(req.body?.name || "");
-    const file = await findFile(name);
-    if (!file) return jsonError(res, 404, "File not found");
-    const token = createShareToken(name);
-    const base = `${req.protocol}://${req.get("host")}`;
-    res.json({ ok: true, url: `${base}/s/${encodeURIComponent(token)}`, expiresIn: SHARE_TTL_SECONDS, name: file.name });
-  } catch (error) {
-    return jsonError(res, 500, error?.message || "Could not create share link");
-  }
-});
 
-function verifyShareToken(token) {
-  const data = verifyPayload(token);
-  return data?.type === "share" ? data : null;
-}
+function findQueueItem(file){
 
-app.post("/api/shared-access", async (req, res) => {
-  const token = String(req.body?.token || "");
-  const data = verifyShareToken(token);
-  if (!data) return jsonError(res, 410, "Share link expired or invalid.");
-  if (!APP_PASSWORD || !safeEqual(String(req.body?.password || ""), APP_PASSWORD)) return jsonError(res, 403, "Incorrect Enter password.");
-  const sharedToken = signPayload({ type: "shared-download", tokenHash: crypto.createHash("sha256").update(token).digest("hex"), exp: Date.now() + 15 * 60 * 1000 });
-  const secure = Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
-  res.setHeader("Set-Cookie", `cloud_zen_shared_download_access=${encodeURIComponent(sharedToken)}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Max-Age=900`);
-  res.json({ ok: true, expiresIn: 900 });
-});
+    const items =
+        Array.from(
+            uploadQueue.querySelectorAll(
+                ".queueItem"
+            )
+        );
 
-app.get(/^\/api\/shared-stream\/(.+)$/, async (req, res) => {
-  try {
-    const token = decodeURIComponent(req.params[0]);
-    const data = verifyShareToken(token);
-    if (!data) return res.status(410).send("Share link expired");
-    const file = await findFile(data.n);
-    if (!file) return res.status(404).send("File not found");
-    await streamBlob(req, res, file.pathname, true);
-  } catch (error) {
-    if (!res.headersSent) res.status(404).send("File not found"); else res.destroy(error);
-  }
-});
 
-app.get(/^\/s\/([^/]+)$/, async (req, res) => {
-  const token = decodeURIComponent(req.params[0]);
-  const data = verifyShareToken(token);
-  if (!data) return res.status(404).send("This share link has expired or is invalid.");
-  const file = await findFile(data.n);
-  if (!file) return res.status(404).send("File not found");
-  const safeName = file.name.replace(/[<>]/g, "");
-  const streamUrl = `/api/shared-stream/${encodeURIComponent(token)}`;
-  const downloadUrl = `/s/${encodeURIComponent(token)}/download`;
-  const mime = file.type || mimeFor(file.name);
-  const escaped = JSON.stringify({ name: safeName, size: file.size, type: mime, streamUrl, downloadUrl, token }).replace(/</g, "\\u003c");
-  res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070b14"><title>${safeName}</title><style>body{margin:0;background:#070b14;color:#eef2ff;font-family:system-ui;display:grid;place-items:center;min-height:100vh;padding:24px;box-sizing:border-box}.card{width:min(920px,100%);padding:28px;border:1px solid #ffffff18;border-radius:28px;background:#ffffff08;backdrop-filter:blur(18px)}h1{font-size:clamp(20px,4vw,34px);margin:0 0 8px;word-break:break-word}.meta{color:#9aa7bf;margin-bottom:22px}video,audio,img,iframe{width:100%;max-height:70vh;border-radius:18px;background:#000;object-fit:contain}.btn{display:inline-flex;margin-top:18px;padding:12px 16px;border-radius:12px;background:#fff;color:#07101e;text-decoration:none;font-weight:750;border:0;cursor:pointer}.shade{position:fixed;inset:0;background:#0009;backdrop-filter:blur(10px);display:none;place-items:center;padding:18px}.box{width:min(420px,100%);background:#101a2b;border:1px solid #ffffff18;border-radius:22px;padding:24px}.box input{width:100%;height:46px;box-sizing:border-box;border-radius:12px;border:1px solid #ffffff18;background:#091321;color:#fff;padding:0 12px;margin:8px 0 12px}.err{color:#ffb5c0;font-size:12px;min-height:18px}</style></head><body><main class="card"><h1>${safeName}</h1><div class="meta">${formatBytes(file.size)} · ${mime}</div><div id="viewer"></div><button class="btn" id="downloadBtn">Download file</button></main><div class="shade" id="shade"><div class="box"><h2>Secure download</h2><p>Enter the website password to continue.</p><input id="pw" type="password" autocomplete="off" placeholder="Password"><div class="err" id="err"></div><button class="btn" id="unlock">Unlock & download</button></div></div><script>const f=${escaped},v=document.getElementById('viewer'),u=f.streamUrl;if(f.type.startsWith('image/'))v.innerHTML='<img src="'+u+'">';else if(f.type.startsWith('video/'))v.innerHTML='<video src="'+u+'" controls playsinline preload="metadata"></video>';else if(f.type.startsWith('audio/'))v.innerHTML='<audio src="'+u+'" controls preload="metadata"></audio>';else if(f.type==='application/pdf'||f.type.startsWith('text/'))v.innerHTML='<iframe src="'+u+'" style="height:70vh"></iframe>';else v.innerHTML='<p style="color:#9aa7bf">Preview is not available for this file type.</p>';const sh=document.getElementById('shade');document.getElementById('downloadBtn').onclick=()=>sh.style.display='grid';document.getElementById('unlock').onclick=async()=>{const err=document.getElementById('err'),b=document.getElementById('unlock');b.disabled=true;err.textContent='';try{const r=await fetch('/api/shared-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:f.token,password:document.getElementById('pw').value})});const d=await r.json();if(!r.ok)throw Error(d.error||'Access denied');location.href=f.downloadUrl}catch(e){err.textContent=e.message;b.disabled=false}};</script></body></html>`);
-});
+    const path =
+        file.webkitRelativePath ||
+        file.name;
 
-app.get(/^\/s\/([^/]+)\/download$/, async (req, res) => {
-  const token = decodeURIComponent(req.params[0]);
-  const data = verifyShareToken(token);
-  if (!data) return res.status(410).send("Share link expired");
-  const file = await findFile(data.n);
-  if (!file) return res.status(404).send("File not found");
-  // Share download is intentionally protected by the website password through
-  // a short-lived cookie in the original UI. For compatibility, accept the
-  // main authenticated session as well as the short-lived shared session.
-  const shared = verifyPayload(getCookie(req, "cloud_zen_shared_download_access"));
-  const validShared = Boolean(shared && shared.type === "shared-download" && shared.tokenHash === crypto.createHash("sha256").update(token).digest("hex"));
-  if (!getSession(req) && !validShared) return res.status(403).send("Download access requires the website password.");
-  await streamBlob(req, res, file.pathname, false);
-});
 
-/* =========================
-   DELETE — MANUAL ONLY
-========================= */
-app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) => {
-  try {
-    const name = cleanName(req.body?.name || "");
-    const requestedPathname = String(req.body?.pathname || "");
+    const existing =
+        items.find(
+            item => {
 
-    let file = requestedPathname
-      ? await findByPathname(requestedPathname)
-      : null;
+                const name =
+                    item.querySelector(
+                        ".queueName"
+                    );
 
-    if (!file) file = await findFile(name);
-    if (!file) return jsonError(res, 404, "File not found");
+                return (
+                    name &&
+                    name.textContent === path
+                );
+            }
+        );
 
-    await del(file.pathname, { access: "private" });
 
-    res.json({
-      ok: true,
-      name: file.name,
-      pathname: file.pathname,
-      message: "File permanently deleted",
-      autoDelete: false
-    });
-  } catch (error) {
-    console.error("DELETE ERROR:", error?.stack || error);
-    return jsonError(res, 500, error?.message || "Delete failed");
-  }
-});
+    if(
+        existing
+    ){
 
-/* =========================
-   DOWNLOAD ALL
-========================= */
-app.get("/api/download-all", requireAuth, async (req, res) => {
-  let archive;
-  try {
-    const files = await listAllFiles();
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", "attachment; filename*=UTF-8''my-personal-cloud-all-files.zip");
-    res.setHeader("Cache-Control", "private, no-store");
-    archive = archiver("zip", { zlib: { level: 0 } });
-    archive.on("error", error => { if (!res.destroyed) res.destroy(error); });
-    archive.pipe(res);
-    for (const file of files) {
-      if (res.destroyed) break;
-      const result = await get(file.pathname, { access: "private" });
-      if (!result?.stream) throw new Error(`Could not read ${file.name}`);
-      archive.append(Readable.fromWeb(result.stream), { name: file.name });
+        return {
+
+            item:existing,
+
+            percent:
+                existing.querySelector(
+                    ".queuePercent"
+                ),
+
+            bar:
+                existing.querySelector(
+                    ".queueProgress > div"
+                )
+        };
     }
-    await archive.finalize();
-  } catch (error) {
-    if (archive) { try { archive.abort(); } catch {} }
-    if (!res.headersSent) res.status(500).json({ error: error?.message || "Could not create archive" });
-    else res.destroy(error);
-  }
-});
 
-app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
 
-app.use((err, req, res, next) => {
-  console.error("UNHANDLED ERROR:", err);
-  if (res.headersSent) return next(err);
-  res.status(500).json({ error: "Internal server error" });
-});
-
-if (!process.env.VERCEL) {
-  app.listen(PORT, HOST, () => console.log(`[my-personal-cloud] Server running on ${HOST}:${PORT}`));
+    return createQueueItem(
+        file
+    );
 }
 
-module.exports = app;
+
+function updateQueue(
+    queue,
+    file,
+    value,
+    done = false
+){
+
+    if(
+        !queue
+    ){
+
+        return;
+    }
+
+
+    const rounded =
+        Math.min(
+            100,
+            Math.round(value)
+        );
+
+
+    queue.percent.textContent =
+        done
+            ? "✓"
+            : `${rounded}%`;
+
+
+    queue.bar.style.width =
+        `${rounded}%`;
+
+
+    if(done){
+
+        setTimeout(
+            () => {
+
+                if(
+                    queue.item
+                ){
+
+                    queue.item.remove();
+                }
+
+            },
+            1600
+        );
+    }
+}
+
+
+/* =========================================================
+ID
+========================================================= */
+
+function cryptoRandomId(){
+
+    if(
+        window.crypto &&
+        crypto.randomUUID
+    ){
+
+        return crypto.randomUUID();
+    }
+
+
+    return (
+        Date.now()
+        .toString(36) +
+        "-" +
+        Math.random()
+            .toString(36)
+            .slice(2)
+    );
+}
+
+
+/* =========================================================
+LOAD EVERYTHING
+========================================================= */
+
+async function loadEverything(){
+
+    try{
+
+        await Promise.all([
+            loadStorage(),
+            loadFiles()
+        ]);
+
+    }catch(error){
+
+        console.error(
+            error
+        );
+    }
+}
+
+
+document
+    .getElementById(
+        "refreshButton"
+    )
+    .addEventListener(
+        "click",
+        loadEverything
+    );
+
+
+/* =========================================================
+ESCAPE
+========================================================= */
+
+function escapeHtml(value){
+
+    return String(value)
+        .replace(
+            /&/g,
+            "&amp;"
+        )
+        .replace(
+            /</g,
+            "&lt;"
+        )
+        .replace(
+            />/g,
+            "&gt;"
+        )
+        .replace(
+            /"/g,
+            "&quot;"
+        )
+        .replace(
+            /'/g,
+            "&#039;"
+        );
+}
+
+
+/* =========================================================
+FORMAT BYTES
+========================================================= */
+
+function formatBytes(bytes){
+
+    if(
+        !Number.isFinite(bytes) ||
+        bytes <= 0
+    ){
+
+        return "0 B";
+    }
+
+
+    const units = [
+        "B",
+        "KB",
+        "MB",
+        "GB",
+        "TB"
+    ];
+
+
+    const index =
+        Math.min(
+            Math.floor(
+                Math.log(bytes) /
+                Math.log(1024)
+            ),
+            units.length - 1
+        );
+
+
+    const value =
+        bytes /
+        Math.pow(
+            1024,
+            index
+        );
+
+
+    return (
+        value.toFixed(
+            index === 0 ? 0 : 2
+        ) +
+        " " +
+        units[index]
+    );
+}
+
+
+/* =========================================================
+AUTO LOCK
+========================================================= */
+
+const AUTO_LOCK_MS =
+    15 * 60 * 1000;
+
+
+let lastActivity =
+    Date.now();
+
+let autoLockTimer =
+    null;
+
+let countdownTimer =
+    null;
+
+
+function resetAutoLock(){
+
+    if(
+        !dashboard.classList.contains(
+            "show"
+        )
+    ){
+
+        return;
+    }
+
+
+    lastActivity =
+        Date.now();
+
+
+    updateLockCountdown();
+
+
+    if(
+        autoLockTimer
+    ){
+
+        clearTimeout(
+            autoLockTimer
+        );
+    }
+
+
+    autoLockTimer =
+        setTimeout(
+            autoLock,
+            AUTO_LOCK_MS
+        );
+}
+
+
+function updateLockCountdown(){
+
+    if(
+        !dashboard.classList.contains(
+            "show"
+        )
+    ){
+
+        return;
+    }
+
+
+    const remaining =
+        Math.max(
+            0,
+            AUTO_LOCK_MS -
+            (
+                Date.now() -
+                lastActivity
+            )
+        );
+
+
+    const seconds =
+        Math.ceil(
+            remaining / 1000
+        );
+
+
+    const minutes =
+        Math.floor(
+            seconds / 60
+        );
+
+
+    const secs =
+        seconds % 60;
+
+
+    lockCountdown.textContent =
+        `${String(minutes).padStart(2,"0")}:${String(secs).padStart(2,"0")}`;
+
+
+    if(
+        remaining <= 0
+    ){
+
+        autoLock();
+
+        return;
+    }
+
+
+    if(
+        countdownTimer
+    ){
+
+        clearTimeout(
+            countdownTimer
+        );
+    }
+
+
+    countdownTimer =
+        setTimeout(
+            updateLockCountdown,
+            1000
+        );
+}
+
+
+function stopAutoLock(){
+
+    if(
+        autoLockTimer
+    ){
+
+        clearTimeout(
+            autoLockTimer
+        );
+
+        autoLockTimer =
+            null;
+    }
+
+
+    if(
+        countdownTimer
+    ){
+
+        clearTimeout(
+            countdownTimer
+        );
+
+        countdownTimer =
+            null;
+    }
+}
+
+
+async function autoLock(){
+
+    if(
+        !dashboard.classList.contains(
+            "show"
+        )
+    ){
+
+        return;
+    }
+
+
+    stopAutoLock();
+
+    closeViewer();
+
+
+    try{
+
+        await api(
+            "/api/auth/logout",
+            {
+                method:"POST"
+            }
+        );
+
+    }catch(_){}
+
+
+    dashboard.classList.remove(
+        "show"
+    );
+
+    loginWrap.classList.remove(
+        "show"
+    );
+
+    autoLockOverlay.classList.add(
+        "show"
+    );
+}
+
+
+unlockAgainButton.addEventListener(
+    "click",
+    () => {
+
+        autoLockOverlay.classList.remove(
+            "show"
+        );
+
+        showLogin();
+    }
+);
+
+
+[
+    "click",
+    "touchstart",
+    "keydown",
+    "mousemove",
+    "scroll"
+].forEach(
+    eventName => {
+
+        document.addEventListener(
+            eventName,
+            () => {
+
+                if(
+                    dashboard.classList.contains(
+                        "show"
+                    )
+                ){
+
+                    lastActivity =
+                        Date.now();
+
+                    resetAutoLock();
+                }
+            },
+            {
+                passive:true
+            }
+        );
+    }
+);
+
+
+/* =========================================================
+REALISTIC CLICK SOUND
+========================================================= */
+
+let audioContext =
+    null;
+
+
+function playClickSound(){
+
+    try{
+
+        if(
+            !audioContext
+        ){
+
+            const AudioContext =
+                window.AudioContext ||
+                window.webkitAudioContext;
+
+            if(
+                !AudioContext
+            ){
+
+                return;
+            }
+
+
+            audioContext =
+                new AudioContext();
+        }
+
+
+        if(
+            audioContext.state ===
+            "suspended"
+        ){
+
+            audioContext.resume();
+        }
+
+
+        const now =
+            audioContext.currentTime;
+
+
+        const oscillator =
+            audioContext.createOscillator();
+
+
+        const gain =
+            audioContext.createGain();
+
+
+        oscillator.type =
+            "sine";
+
+
+        oscillator.frequency.setValueAtTime(
+            180,
+            now
+        );
+
+
+        oscillator.frequency.exponentialRampToValueAtTime(
+            95,
+            now + .045
+        );
+
+
+        gain.gain.setValueAtTime(
+            .0001,
+            now
+        );
+
+
+        gain.gain.exponentialRampToValueAtTime(
+            .045,
+            now + .006
+        );
+
+
+        gain.gain.exponentialRampToValueAtTime(
+            .0001,
+            now + .055
+        );
+
+
+        oscillator.connect(
+            gain
+        );
+
+        gain.connect(
+            audioContext.destination
+        );
+
+
+        oscillator.start(
+            now
+        );
+
+        oscillator.stop(
+            now + .06
+        );
+
+    }catch(_){}
+}
+
+
+/* =========================================================
+BUTTON SOUND
+========================================================= */
+
+document.addEventListener(
+    "pointerdown",
+    event => {
+
+        const target =
+            event.target.closest(
+                "button, .uploadButton, label"
+            );
+
+
+        if(
+            target
+        ){
+
+            playClickSound();
+        }
+    },
+    {
+        passive:true
+    }
+);
+
+
+/* =========================================================
+STAR SPACE
+========================================================= */
+
+const canvas =
+    document.getElementById(
+        "spaceCanvas"
+    );
+
+const ctx =
+    canvas.getContext(
+        "2d"
+    );
+
+
+let width = 0;
+let height = 0;
+let dpr = 1;
+
+let stars = [];
+let crashes = [];
+
+
+function resizeCanvas(){
+
+    dpr =
+        Math.min(
+            window.devicePixelRatio || 1,
+            2
+        );
+
+
+    width =
+        window.innerWidth;
+
+    height =
+        window.innerHeight;
+
+
+    canvas.width =
+        width * dpr;
+
+    canvas.height =
+        height * dpr;
+
+
+    canvas.style.width =
+        width + "px";
+
+    canvas.style.height =
+        height + "px";
+
+
+    ctx.setTransform(
+        dpr,
+        0,
+        0,
+        dpr,
+        0,
+        0
+    );
+
+
+    createStars();
+}
+
+
+function createStars(){
+
+    stars = [];
+
+
+    const amount =
+        Math.min(
+            180,
+            Math.floor(
+                width *
+                height /
+                6500
+            )
+        );
+
+
+    for(
+        let i = 0;
+        i < amount;
+        i++
+    ){
+
+        stars.push({
+
+            x:
+                Math.random() *
+                width,
+
+            y:
+                Math.random() *
+                height,
+
+            r:
+                .4 +
+                Math.random() *
+                1.5,
+
+            alpha:
+                .25 +
+                Math.random() *
+                .75,
+
+            phase:
+                Math.random() *
+                Math.PI *
+                2,
+
+            speed:
+                .5 +
+                Math.random() *
+                2
+        });
+    }
+}
+
+
+function spawnCrash(){
+
+    const fromTop =
+        Math.random() < .65;
+
+
+    const x =
+        fromTop
+            ? Math.random() * width
+            : width + 30;
+
+
+    const y =
+        fromTop
+            ? -40
+            : Math.random() *
+                height *
+                .65;
+
+
+    const targetX =
+        Math.random() *
+        width;
+
+
+    const targetY =
+        height *
+        (
+            .25 +
+            Math.random() *
+            .5
+        );
+
+
+    const dx =
+        targetX - x;
+
+    const dy =
+        targetY - y;
+
+    const distance =
+        Math.hypot(
+            dx,
+            dy
+        );
+
+
+    const speed =
+        7 +
+        Math.random() *
+        6;
+
+
+    crashes.push({
+
+        x,
+        y,
+
+        vx:
+            dx /
+            distance *
+            speed,
+
+        vy:
+            dy /
+            distance *
+            speed,
+
+        life:1,
+
+        trail:[],
+
+        target:
+            distance *
+            .78,
+
+        travelled:0
+    });
+}
+
+
+function explode(x,y){
+
+    for(
+        let i=0;
+        i<28;
+        i++
+    ){
+
+        const angle =
+            Math.random() *
+            Math.PI *
+            2;
+
+
+        const speed =
+            1.2 +
+            Math.random() *
+            5.5;
+
+
+        const life =
+            .6 +
+            Math.random() *
+            .5;
+
+
+        crashes.push({
+
+            x,
+            y,
+
+            vx:
+                Math.cos(angle) *
+                speed,
+
+            vy:
+                Math.sin(angle) *
+                speed,
+
+            life,
+
+            particle:true
+        });
+    }
+
+
+    crashes.push({
+
+        x,
+        y,
+
+        ring:true,
+
+        radius:2,
+
+        life:1
+    });
+}
+
+
+function animationLoop(time){
+
+    if(
+        time -
+        animationLoop.lastCrash >
+        850
+    ){
+
+        spawnCrash();
+
+        animationLoop.lastCrash =
+            time;
+    }
+}
+
+
+animationLoop.lastCrash =
+    0;
+
+
+function drawSpaceFrame(time){
+
+    ctx.clearRect(
+        0,
+        0,
+        width,
+        height
+    );
+
+
+    for(
+        const star of stars
+    ){
+
+        const alpha =
+            star.alpha *
+            (
+                .55 +
+                Math.sin(
+                    time *
+                    .002 *
+                    star.speed +
+                    star.phase
+                ) *
+                .45
+            );
+
+
+        ctx.beginPath();
+
+        ctx.arc(
+            star.x,
+            star.y,
+            star.r,
+            0,
+            Math.PI * 2
+        );
+
+
+        ctx.fillStyle =
+            `rgba(255,255,255,${alpha})`;
+
+
+        ctx.shadowBlur =
+            star.r > 1.2
+                ? 8
+                : 2;
+
+
+        ctx.shadowColor =
+            "rgba(185,201,255,.8)";
+
+
+        ctx.fill();
+    }
+
+
+    for(
+        let i=crashes.length-1;
+        i>=0;
+        i--
+    ){
+
+        const item =
+            crashes[i];
+
+
+        if(item.particle){
+
+            item.x +=
+                item.vx;
+
+            item.y +=
+                item.vy;
+
+
+            item.vx *=
+                .97;
+
+            item.vy *=
+                .97;
+
+
+            item.life -=
+                .02;
+
+
+            ctx.beginPath();
+
+            ctx.arc(
+                item.x,
+                item.y,
+                1.4 +
+                item.life,
+                0,
+                Math.PI * 2
+            );
+
+
+            ctx.fillStyle =
+                `rgba(255,226,138,${item.life})`;
+
+
+            ctx.shadowBlur =
+                12;
+
+
+            ctx.shadowColor =
+                "rgba(255,190,120,.9)";
+
+
+            ctx.fill();
+
+
+            if(
+                item.life <= 0
+            ){
+
+                crashes.splice(
+                    i,
+                    1
+                );
+            }
+
+            continue;
+        }
+
+
+        if(item.ring){
+
+            item.radius +=
+                4.5;
+
+            item.life *=
+                .94;
+
+
+            ctx.beginPath();
+
+            ctx.arc(
+                item.x,
+                item.y,
+                item.radius,
+                0,
+                Math.PI * 2
+            );
+
+
+            ctx.strokeStyle =
+                `rgba(255,220,160,${item.life})`;
+
+
+            ctx.lineWidth =
+                2;
+
+
+            ctx.shadowBlur =
+                20;
+
+
+            ctx.shadowColor =
+                "rgba(255,190,130,.9)";
+
+
+            ctx.stroke();
+
+
+            if(
+                item.life < .025
+            ){
+
+                crashes.splice(
+                    i,
+                    1
+                );
+            }
+
+            continue;
+        }
+
+
+        item.trail.push({
+
+            x:item.x,
+            y:item.y
+
+        });
+
+
+        if(
+            item.trail.length > 13
+        ){
+
+            item.trail.shift();
+        }
+
+
+        ctx.beginPath();
+
+
+        item.trail.forEach(
+            (
+                point,
+                index
+            ) => {
+
+                if(
+                    index === 0
+                ){
+
+                    ctx.moveTo(
+                        point.x,
+                        point.y
+                    );
+
+                }else{
+
+                    ctx.lineTo(
+                        point.x,
+                        point.y
+                    );
+                }
+            }
+        );
+
+
+        ctx.strokeStyle =
+            "rgba(185,201,255,.42)";
+
+
+        ctx.lineWidth =
+            2;
+
+
+        ctx.shadowBlur =
+            16;
+
+
+        ctx.shadowColor =
+            "rgba(185,201,255,.9)";
+
+
+        ctx.stroke();
+
+
+        ctx.beginPath();
+
+
+        ctx.arc(
+            item.x,
+            item.y,
+            2.6,
+            0,
+            Math.PI * 2
+        );
+
+
+        ctx.fillStyle =
+            "white";
+
+
+        ctx.shadowBlur =
+            25;
+
+
+        ctx.shadowColor =
+            "white";
+
+
+        ctx.fill();
+
+
+        item.x +=
+            item.vx;
+
+        item.y +=
+            item.vy;
+
+
+        item.travelled +=
+            Math.hypot(
+                item.vx,
+                item.vy
+            );
+
+
+        if(
+            item.travelled >=
+            item.target
+        ){
+
+            explode(
+                item.x,
+                item.y
+            );
+
+
+            crashes.splice(
+                i,
+                1
+            );
+        }
+    }
+
+
+    ctx.shadowBlur =
+        0;
+}
+
+
+function render(time){
+
+    drawSpaceFrame(
+        time
+    );
+
+    animationLoop(
+        time
+    );
+
+    requestAnimationFrame(
+        render
+    );
+}
+
+
+/* =========================================================
+START
+========================================================= */
+
+window.addEventListener(
+    "resize",
+    resizeCanvas
+);
+
+
+resizeCanvas();
+
+
+requestAnimationFrame(
+    render
+);
+
+
+/* =========================================================
+INTRO TIMING
+========================================================= */
+
+setTimeout(
+    () => {
+
+        intro.classList.add(
+            "hide"
+        );
+
+        checkLogin();
+
+    },
+    2500
+);
+
+</script>
+
+</body>
+</html>
