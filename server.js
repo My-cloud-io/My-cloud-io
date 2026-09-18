@@ -35,7 +35,7 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const APP_PASSWORD = String(process.env.APP_PASSWORD ?? "").trim();
 const DELETE_PASSWORD = String(process.env.DELETE_PASSWORD ?? "").trim();
 const SESSION_SECRET = String(process.env.SESSION_SECRET ?? "").trim();
-const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 1024 * 1024 * 1024 * 1024);
+const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 5 * 1024 * 1024 * 1024 * 1024);
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 3;
@@ -599,16 +599,34 @@ app.patch("/api/files", requireAuth, async (req, res) => {
   try {
     const oldName = cleanName(req.body?.name || "");
     const newName = cleanName(req.body?.newName || "");
+    const pathname = String(req.body?.pathname || "");
     if (!oldName || !newName || oldName === newName) return jsonError(res, 400, "Enter a different file name.");
-    const file = await findFile(oldName);
+
+    const file = pathname
+      ? await findByPathname(pathname)
+      : await findFile(oldName);
+
     if (!file) return jsonError(res, 404, "File not found");
-    const duplicate = await findFile(newName);
-    if (duplicate) return jsonError(res, 409, "A file with that name already exists.");
+
     const parsed = parseFilePath(file.pathname);
     const newPath = makePath(parsed?.id || crypto.randomUUID(), parsed?.relativePath || "", newName);
+    const duplicate = await findByPathname(newPath);
+    if (duplicate) return jsonError(res, 409, "A file with that name already exists in this folder.");
+
     await copy(file.pathname, newPath, { access: "private", addRandomSuffix: false });
     await del(file.pathname, { access: "private" });
-    res.json({ ok: true, file: publicFile({ ...file, name: newName, pathname: newPath, type: mimeFor(newName), modified: new Date().toISOString() }) });
+
+    res.json({
+      ok: true,
+      file: publicFile({
+        ...file,
+        name: newName,
+        pathname: newPath,
+        type: mimeFor(newName),
+        mime: mimeFor(newName),
+        modified: new Date().toISOString()
+      })
+    });
   } catch (error) {
     console.error("RENAME ERROR:", error?.stack || error);
     return jsonError(res, 500, error?.message || "Rename failed");
@@ -700,10 +718,13 @@ app.get(/^\/s\/([^/]+)\/download$/, async (req, res) => {
 app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) => {
   try {
     const name = cleanName(req.body?.name || "");
-    const file = await findFile(name);
+    const pathname = String(req.body?.pathname || "");
+    const file = pathname
+      ? await findByPathname(pathname)
+      : await findFile(name);
     if (!file) return jsonError(res, 404, "File not found");
     await del(file.pathname, { access: "private" });
-    res.json({ ok: true, name, message: "File permanently deleted", autoDelete: false });
+    res.json({ ok: true, name: file.name, pathname: file.pathname, message: "File permanently deleted", autoDelete: false });
   } catch (error) {
     console.error("DELETE ERROR:", error?.stack || error);
     return jsonError(res, 500, error?.message || "Delete failed");
