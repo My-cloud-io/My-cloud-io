@@ -1,7 +1,7 @@
 "use strict";
 
 /*
-  CLOUD-ZEN — private personal cloud
+  CLOUD-ZEN — private personal cloud\n  Vercel-safe Telegram upload build
   Storage: Telegram MTProto user account (hidden from the UI)
 
   Important operational note:
@@ -9,8 +9,7 @@
     closed before all chunks reach the server, the browser can cancel the
     remaining requests. No web app can guarantee continued transfer of bytes
     that the browser has stopped sending.
-  - Render Free services have an ephemeral filesystem and may spin down after
-    15 minutes without inbound traffic. We therefore keep only one temporary
+  - The runtime filesystem is temporary. We therefore keep only one temporary
     chunk on disk and persist the actual file data in Telegram. The service
     can cold-start again and rebuild its index from Telegram.
 */
@@ -45,9 +44,16 @@ const TELEGRAM_API_HASH = String(process.env.TELEGRAM_API_HASH || "").trim();
 const TELEGRAM_SESSION = String(process.env.TELEGRAM_SESSION || "").trim();
 const TELEGRAM_STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || "me").trim();
 
-// Vercel Functions accept requests only up to a few MB. Keep this fixed so an
-// old CHUNK_SIZE environment variable can never make browser requests too large.
-const CHUNK_SIZE = 4 * 1024 * 1024;
+const VERCEL_MAX_REQUEST_BYTES = 4 * 1024 * 1024;
+
+/*
+  This build targets Vercel Functions. Keep the same 4 MB chunk size
+  on both browser and server even if an older CHUNK_SIZE environment
+  variable is still present.
+*/
+const CHUNK_SIZE =
+  VERCEL_MAX_REQUEST_BYTES;
+
 const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 20 * 1024 * 1024 * 1024 * 1024);
 const MAX_CHUNKS = 100000;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -55,7 +61,7 @@ const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 3;
 
 if (!APP_PASSWORD || !DELETE_PASSWORD || !SESSION_SECRET) {
-  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in the deployment environment.");
+  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in the hosting environment.");
 }
 if (!TELEGRAM_API_ID || !TELEGRAM_API_HASH || !TELEGRAM_SESSION) {
   console.warn("[Cloud-Zen] Telegram MTProto credentials are not fully configured.");
@@ -403,13 +409,11 @@ function parseChunkCaption(text) {
 ========================= */
 let fileIndex = new Map();
 let indexLoaded = false;
-let indexLoadedAt = 0;
 let indexPromise = null;
-const INDEX_TTL_MS = 2 * 60 * 1000;
 
 async function rebuildIndex(force = false) {
   if (indexPromise && !force) return indexPromise;
-  if (indexLoaded && !force && (Date.now() - indexLoadedAt) < INDEX_TTL_MS) return fileIndex;
+  if (indexLoaded && !force) return fileIndex;
 
   indexPromise = (async () => {
     const client = await getTelegramClient();
@@ -417,10 +421,7 @@ async function rebuildIndex(force = false) {
 
     // Telegram history is the durable index. Only messages with our CZ1
     // marker are considered storage records.
-    // Search Telegram server-side for our unique caption marker instead of scanning
-    // the entire Saved Messages history. This is much faster once the account has
-    // a large amount of unrelated history.
-    for await (const message of client.iterMessages(TELEGRAM_STORAGE_CHAT, { search: "CZ1", limit: undefined, waitTime: 0 })) {
+    for await (const message of client.iterMessages(TELEGRAM_STORAGE_CHAT, { limit: 0 })) {
       const parsed = parseChunkCaption(message?.message || message?.text || "");
       if (!parsed || !Number.isInteger(parsed.index) || parsed.index < 0) continue;
       if (!message.id) continue;
@@ -458,7 +459,6 @@ async function rebuildIndex(force = false) {
 
     fileIndex = next;
     indexLoaded = true;
-    indexLoadedAt = Date.now();
     return fileIndex;
   })();
 
@@ -485,17 +485,41 @@ function publicFile(meta) {
 app.get("/api/health", async (req, res) => {
   try {
     await getTelegramClient();
+
     res.json({
       success: true,
       status: "online",
-      storage: "Cloud Storage",
+      storage: "Telegram MTProto",
       persistent: true,
       multipart: true,
+      platform: process.env.VERCEL ? "vercel" : "node",
       chunkSizeBytes: CHUNK_SIZE,
-      telegram: { configured: true, connected: telegramReady }
+      telegram: {
+        configured: true,
+        connected: telegramReady
+      }
     });
   } catch (error) {
-    res.status(503).json({ success: false, status: "degraded", storage: "Cloud Storage", error: error.message });
+    const message =
+      error?.message ||
+      String(error);
+
+    res.status(503).json({
+      success: false,
+      status: "degraded",
+      storage: "Telegram MTProto",
+      platform: process.env.VERCEL ? "vercel" : "node",
+      chunkSizeBytes: CHUNK_SIZE,
+      telegram: {
+        configured: Boolean(
+          TELEGRAM_API_ID &&
+          TELEGRAM_API_HASH &&
+          TELEGRAM_SESSION
+        ),
+        connected: false
+      },
+      error: message
+    });
   }
 });
 
@@ -548,6 +572,15 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
   if (!/^[a-f0-9-]{20,80}$/i.test(id)) return res.status(400).json({ error: "Invalid upload ID" });
   if (!Number.isInteger(index) || index < 0 || !Number.isInteger(total) || total < 1 || total > MAX_CHUNKS || index >= total) return res.status(400).json({ error: "Invalid chunk information" });
   if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_FILE_SIZE) return res.status(400).json({ error: "Invalid file size" });
+
+  if (
+    process.env.VERCEL &&
+    Number(req.headers["content-length"] || 0) > VERCEL_MAX_REQUEST_BYTES
+  ) {
+    return res.status(413).json({
+      error: "Chunk is too large for Vercel. Use a maximum 4 MB chunk."
+    });
+  }
 
   const expectedStart = index * CHUNK_SIZE;
   const expectedEnd = Math.min(size, expectedStart + CHUNK_SIZE);
@@ -622,7 +655,6 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
         modified: new Date().toISOString()
       });
       indexLoaded = true;
-      indexLoadedAt = Date.now();
       activeUploads.delete(uploadKey);
     }
 
@@ -720,11 +752,7 @@ async function streamFileToResponse(req, res, meta, inline) {
   res.setHeader("Content-Type", mimeFor(meta.name));
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
-  if (mimeFor(meta.name) === "application/pdf" && inline) {
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
-  }
-  res.setHeader("Cache-Control", "private, max-age=3600, stale-while-revalidate=86400");
+  res.setHeader("Cache-Control", "private, no-store");
   res.setHeader("Content-Length", String(end - start + 1));
   if (partial) res.setHeader("Content-Range", `bytes ${start}-${end}/${totalSize}`);
 
@@ -831,8 +859,6 @@ app.patch("/api/files", requireAuth, async (req, res) => {
     const renamed = { ...file, name: newName, modified: new Date().toISOString() };
     fileIndex.delete(oldName);
     fileIndex.set(newName, renamed);
-    indexLoaded = true;
-    indexLoadedAt = Date.now();
     return res.json({ ok: true, file: publicFile(renamed) });
   } catch (error) {
     console.error("RENAME ERROR:", error);
@@ -935,8 +961,6 @@ app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) =>
     if (ids.length) await deleteTelegramMessages(ids);
 
     fileIndex.delete(name);
-    indexLoaded = true;
-    indexLoadedAt = Date.now();
     res.json({ ok: true, name, message: "File permanently deleted" });
   } catch (error) {
     console.error("DELETE ERROR:", error);
