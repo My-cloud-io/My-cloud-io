@@ -6761,11 +6761,11 @@ qrModal.addEventListener(
 async function loadEverything(){
 
     try{
-
-        await Promise.all([
-            loadStorage(),
-            loadFiles()
-        ]);
+        // Keep Telegram-backed requests sequential on Vercel.
+        // This avoids opening multiple Telegram connections at the same time
+        // during a dashboard refresh.
+        await loadFiles();
+        await loadStorage();
 
     }catch(error){
 
