@@ -3368,8 +3368,6 @@ input[type="password"]::placeholder{
             </div>
 
         </section>
-
-
         <div class="cloudToolbar">
 
             <div class="searchBox">
@@ -4126,16 +4124,6 @@ const storageRemaining =
         "storageRemaining"
     );
 
-const storageProviderGrid =
-    document.getElementById(
-        "storageProviderGrid"
-    );
-
-const storageDetailsRefresh =
-    document.getElementById(
-        "storageDetailsRefresh"
-    );
-
 const downloadAllButton =
     document.getElementById(
         "downloadAllButton"
@@ -4873,7 +4861,6 @@ async function loadStorage(){
         `Free: ${data.remainingText}`;
 
 
-    renderStorageProviders(data);
 }
 
 
@@ -4902,6 +4889,30 @@ function formatClientBytes(bytes){
 }
 
 
+
+/* =========================================================
+   STORAGE ACCORDION — COLLAPSE LONG PROVIDER LIST
+========================================================= */
+(function initStorageAccordion(){
+    const detailsCard = document.getElementById("storageDetailsCard");
+    const head = detailsCard?.querySelector(".storageDetailsHead");
+    if(!detailsCard || !head) return;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "storageAccordionButton";
+    button.innerHTML = `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`;
+
+    button.addEventListener("click", () => {
+        const collapsed = detailsCard.classList.toggle("storageCompact");
+        button.innerHTML = collapsed
+            ? `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`
+            : `Hide <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌃</span>`;
+    });
+
+    head.appendChild(button);
+    detailsCard.classList.add("storageCompact");
+})();
 
 storageDetailsRefresh?.addEventListener(
     "click",
@@ -5748,6 +5759,27 @@ function createFileCard(
     );
 
 
+    const rename =
+        document.createElement(
+            "button"
+        );
+
+    rename.className =
+        "fileAction";
+
+    rename.textContent =
+        "Rename";
+
+    rename.addEventListener(
+        "click",
+        () => {
+            renameFile(
+                file
+            );
+        }
+    );
+
+
     const share =
         document.createElement(
             "button"
@@ -5772,26 +5804,6 @@ function createFileCard(
                 file
             );
         }
-    );
-
-
-    const rename =
-        document.createElement(
-            "button"
-        );
-
-    rename.className =
-        "fileAction";
-
-    rename.textContent =
-        "Rename";
-
-    rename.addEventListener(
-        "click",
-        () =>
-            renameFile(
-                file
-            )
     );
 
 
@@ -5853,7 +5865,6 @@ function createFileCard(
         open,
         download,
         share,
-        rename,
         more
     );
 
@@ -6504,119 +6515,305 @@ async function deleteFile(
             `Delete "${name}" permanently?`
         );
 
+
     if(!ok){
         return;
     }
 
+
     const deletePassword =
-        window.prompt(
-            "Enter delete password to permanently delete this file:"
-        );
+        await requestDeletePassword();
+
 
     if(deletePassword === null){
         return;
     }
 
-    if(!deletePassword.trim()){
+
+    if(!deletePassword){
         alert(
             "Delete password is required."
         );
         return;
     }
 
+
     try{
+
         await api(
             "/api/files",
             {
+
                 method:"DELETE",
+
                 headers:{
-                    "Content-Type":"application/json"
+                    "Content-Type":
+                        "application/json"
                 },
-                body:JSON.stringify({
-                    name,
-                    pathname,
-                    deletePassword
-                })
+
+                body:
+                    JSON.stringify({
+                        name,
+                        pathname,
+                        deletePassword
+                    })
             }
         );
 
-        starred.delete(name);
-        writeJSON(STAR_KEY,[...starred]);
 
-        recent = recent.filter(item => item !== name);
-        writeJSON(RECENT_KEY,recent);
+        starred.delete(
+            name
+        );
 
-        showToast("File deleted");
+
+        writeJSON(
+            STAR_KEY,
+            [...starred]
+        );
+
+
+        recent =
+            recent.filter(
+                item =>
+                    item !== name
+            );
+
+
+        writeJSON(
+            RECENT_KEY,
+            recent
+        );
+
+
+        showToast(
+            "File deleted"
+        );
+
+
         await loadEverything();
+
     }catch(error){
-        alert(error.message);
+
+        alert(
+            error.message
+        );
     }
 }
 
 
+function requestDeletePassword(){
+
+    return new Promise(
+        resolve => {
+
+            const shade =
+                document.createElement("div");
+
+            shade.style.cssText = [
+                "position:fixed",
+                "inset:0",
+                "z-index:10000",
+                "display:grid",
+                "place-items:center",
+                "padding:20px",
+                "background:rgba(0,0,0,.68)",
+                "backdrop-filter:blur(12px)",
+                "-webkit-backdrop-filter:blur(12px)"
+            ].join(";");
+
+            const box =
+                document.createElement("div");
+
+            box.style.cssText = [
+                "width:min(420px,100%)",
+                "padding:24px",
+                "border-radius:24px",
+                "border:1px solid rgba(255,255,255,.12)",
+                "background:linear-gradient(145deg,rgba(28,43,64,.98),rgba(12,21,35,.98))",
+                "box-shadow:0 25px 80px rgba(0,0,0,.55)",
+                "color:#f5f8ff"
+            ].join(";");
+
+            box.innerHTML = `
+                <div style="font-size:20px;font-weight:850;margin-bottom:8px">Delete Password</div>
+                <div style="font-size:13px;color:#91a0b5;margin-bottom:16px">Enter the separate password to permanently delete this file.</div>
+                <input id="cloudDeletePasswordInput" type="password" autocomplete="off" inputmode="text" placeholder="Delete password" style="width:100%;height:48px;box-sizing:border-box;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.24);color:#fff;padding:0 14px;outline:none;margin-bottom:16px">
+                <div style="display:flex;gap:10px;justify-content:flex-end">
+                    <button type="button" id="cloudDeleteCancel" style="height:44px;padding:0 16px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#dbe5f2;font-weight:750">Cancel</button>
+                    <button type="button" id="cloudDeleteConfirm" style="height:44px;padding:0 18px;border-radius:12px;border:0;background:linear-gradient(135deg,#9fc9ff,#c2b0ff);color:#08111e;font-weight:850">Delete</button>
+                </div>
+            `;
+
+            shade.appendChild(box);
+            document.body.appendChild(shade);
+
+            const input =
+                box.querySelector("#cloudDeletePasswordInput");
+            const cancel =
+                box.querySelector("#cloudDeleteCancel");
+            const confirmButton =
+                box.querySelector("#cloudDeleteConfirm");
+
+            let closed = false;
+
+            const close = value => {
+                if(closed) return;
+                closed = true;
+                shade.remove();
+                resolve(value);
+            };
+
+            cancel.addEventListener(
+                "click",
+                () => close(null)
+            );
+
+            confirmButton.addEventListener(
+                "click",
+                () => close(input.value)
+            );
+
+            shade.addEventListener(
+                "click",
+                event => {
+                    if(event.target === shade){
+                        close(null);
+                    }
+                }
+            );
+
+            input.addEventListener(
+                "keydown",
+                event => {
+                    if(event.key === "Enter"){
+                        event.preventDefault();
+                        close(input.value);
+                    }
+                    if(event.key === "Escape"){
+                        event.preventDefault();
+                        close(null);
+                    }
+                }
+            );
+
+            setTimeout(
+                () => input.focus(),
+                40
+            );
+        }
+    );
+}
+
+
 /* =========================================================
-   RENAME
+   REAL RENAME
 ========================================================= */
 
 async function renameFile(
     file
 ){
 
-    const currentName =
-        String(file?.name || "file");
+    if(!file){
+        return;
+    }
 
-    const nextName =
-        window.prompt(
-            "Enter the new name:",
+
+    const currentName =
+        String(file.name || "");
+
+
+    const newName =
+        prompt(
+            "Enter new file name:",
             currentName
         );
 
-    if(nextName === null){
+
+    if(newName === null){
         return;
     }
 
-    const trimmed = nextName.trim();
+
+    const trimmed =
+        newName.trim();
+
 
     if(!trimmed){
-        alert("File name cannot be empty.");
+        alert(
+            "File name is required."
+        );
         return;
     }
+
 
     if(trimmed === currentName){
         return;
     }
 
+
     try{
+
         await api(
             "/api/files",
             {
+
                 method:"PATCH",
+
                 headers:{
-                    "Content-Type":"application/json"
+                    "Content-Type":
+                        "application/json"
                 },
-                body:JSON.stringify({
-                    name:currentName,
-                    newName:trimmed,
-                    pathname:String(file?.pathname || "")
-                })
+
+                body:
+                    JSON.stringify({
+                        name:currentName,
+                        newName:trimmed,
+                        pathname:file.pathname || ""
+                    })
             }
         );
 
-        starred.delete(currentName);
-        starred.add(trimmed);
-        writeJSON(STAR_KEY,[...starred]);
 
-        recent = recent.map(
-            item => item === currentName ? trimmed : item
+        if(starred.has(currentName)){
+            starred.delete(currentName);
+            starred.add(trimmed);
+            writeJSON(
+                STAR_KEY,
+                [...starred]
+            );
+        }
+
+
+        recent =
+            recent.map(
+                item =>
+                    item === currentName
+                        ? trimmed
+                        : item
+            );
+
+
+        writeJSON(
+            RECENT_KEY,
+            recent
         );
-        writeJSON(RECENT_KEY,recent);
 
-        showToast("File renamed");
+
+        showToast(
+            `Renamed to ${trimmed}`
+        );
+
+
         await loadEverything();
+
     }catch(error){
-        alert(error.message);
+
+        alert(
+            error.message
+        );
     }
 }
+
 
 
 /* =========================================================
@@ -6766,70 +6963,102 @@ async function uploadFiles(
 
 
 /* =========================================================
-   REAL VERCEL BLOB UPLOAD — SIGNED DIRECT PUT
+   REAL VERCEL BLOB MULTIPART UPLOAD
 ========================================================= */
 
 /*
-  The previous build used @vercel/blob/client + /api/blob-upload.
-  Private client-token uploads are currently the fragile part of that flow.
-  This build instead asks our authenticated server for a short-lived, exact
-  pathname-scoped private PUT URL, then sends the file bytes directly to Blob.
-  The Vercel Function never receives the file bytes.
+  Large files are uploaded directly from the browser to private Vercel Blob.
+  multipart:true makes Vercel Blob split the file into parts, upload parts
+  concurrently, and retry failed parts. The Vercel Function only handles the
+  short-lived upload authorization; it never receives the video/audio bytes.
 */
 
-let vercelBlobClientModule = null;
+let vercelBlobClientPromise = null;
 
 async function getVercelBlobClient(){
-    if(vercelBlobClientModule){
-        return vercelBlobClientModule;
+
+    if(!vercelBlobClientPromise){
+
+        vercelBlobClientPromise =
+            import(
+                "https://esm.sh/@vercel/blob@2.6.1/client?bundle"
+            ).catch(
+                error => {
+                    vercelBlobClientPromise = null;
+                    throw error;
+                }
+            );
     }
-    vercelBlobClientModule = import(
-        "https://esm.sh/@vercel/blob@2.6.1/client?bundle"
-    );
-    return vercelBlobClientModule;
+
+    return vercelBlobClientPromise;
 }
 
-async function uploadWithVercelMultipart(
+
+async function uploadLargeFileToBlob(
     pathname,
     file,
-    queue
+    queue,
+    id,
+    relativePath
 ){
-    const module = await getVercelBlobClient();
 
-    if(typeof module.upload !== "function"){
+    const module =
+        await getVercelBlobClient();
+
+
+    if(!module || typeof module.upload !== "function"){
         throw new Error(
             "Large-file upload module could not be loaded. Please refresh and try again."
         );
     }
 
+
     return module.upload(
         pathname,
         file,
         {
+
             access:"private",
-            handleUploadUrl:"/api/blob-upload",
-            clientPayload:JSON.stringify({
-                id:cryptoRandomId(),
-                size:file.size,
-                name:file.name,
-                relativePath:file.webkitRelativePath || ""
-            }),
+
+            handleUploadUrl:
+                "/api/blob-upload",
+
             multipart:true,
-            onUploadProgress:event => {
-                const percentage = Number(event?.percentage) || 0;
-                const loaded = Number(event?.loaded) || 0;
-                const total = Number(event?.total) || file.size;
-                updateQueue(
-                    queue,
-                    percentage,
-                    false,
-                    loaded,
-                    total
-                );
-            }
+
+            clientPayload:
+                JSON.stringify({
+                    id,
+                    size:file.size,
+                    name:file.name,
+                    relativePath
+                }),
+
+            onUploadProgress:
+                event => {
+
+                    const percent =
+                        Math.max(
+                            0,
+                            Math.min(
+                                100,
+                                Number(
+                                    event?.percentage
+                                ) || 0
+                            )
+                        );
+
+                    updateQueue(
+                        queue,
+                        percent,
+                        false,
+                        file.size * percent / 100,
+                        file.size
+                    );
+                }
         }
     );
 }
+
 
 async function uploadFile(
     file
@@ -6913,10 +7142,12 @@ async function uploadFile(
 
     try{
 
-        await uploadWithVercelMultipart(
+        await uploadLargeFileToBlob(
             pathname,
             file,
-            queue
+            queue,
+            id,
+            relativePath
         );
 
         /*
@@ -7715,6 +7946,10 @@ window.addEventListener(
 
 </body>
     </html>
+
+
+    
+
 
 
     
