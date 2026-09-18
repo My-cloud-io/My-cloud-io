@@ -5959,6 +5959,28 @@ function createFileCard(
     );
 
 
+    const rename =
+        document.createElement(
+            "button"
+        );
+
+    rename.className =
+        "fileAction";
+
+    rename.textContent =
+        "Rename";
+
+
+    rename.addEventListener(
+        "click",
+        () => {
+            renameFile(
+                file.name
+            );
+        }
+    );
+
+
     const share =
         document.createElement(
             "button"
@@ -6042,6 +6064,7 @@ function createFileCard(
     actions.append(
         open,
         download,
+        rename,
         share,
         more
     );
@@ -6680,6 +6703,121 @@ function closeViewer(){
 
 
 /* =========================================================
+   REAL RENAME — VERCEL BLOB
+========================================================= */
+
+async function renameFile(
+    name
+){
+
+    const currentName =
+        String(name || "").trim();
+
+    if(!currentName){
+        return;
+    }
+
+
+    const newName =
+        window.prompt(
+            `Rename "${currentName}" to:`,
+            currentName
+        );
+
+
+    if(newName === null){
+        return;
+    }
+
+
+    const trimmedName =
+        String(newName).trim();
+
+
+    if(!trimmedName){
+        alert(
+            "A new file name is required."
+        );
+        return;
+    }
+
+
+    if(trimmedName === currentName){
+        return;
+    }
+
+
+    try{
+
+        await api(
+            "/api/files",
+            {
+
+                method:"PATCH",
+
+                headers:{
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:
+                    JSON.stringify({
+                        name:currentName,
+                        newName:trimmedName
+                    })
+            }
+        );
+
+
+        starred =
+            new Set(
+                [...starred].map(
+                    item =>
+                        item === currentName
+                            ? trimmedName
+                            : item
+                )
+            );
+
+
+        writeJSON(
+            STAR_KEY,
+            [...starred]
+        );
+
+
+        recent =
+            recent.map(
+                item =>
+                    item === currentName
+                        ? trimmedName
+                        : item
+            );
+
+
+        writeJSON(
+            RECENT_KEY,
+            recent
+        );
+
+
+        showToast(
+            `Renamed to ${trimmedName}`
+        );
+
+
+        await loadEverything();
+
+    }catch(error){
+
+        alert(
+            error.message
+        );
+    }
+}
+
+
+/* =========================================================
    DELETE
 ========================================================= */
 
@@ -6694,6 +6832,25 @@ async function deleteFile(
 
 
     if(!ok){
+        return;
+    }
+
+
+    const deletePassword =
+        window.prompt(
+            `Enter Delete Password to permanently delete "${name}"`
+        );
+
+
+    if(deletePassword === null){
+        return;
+    }
+
+
+    if(!String(deletePassword).trim()){
+        alert(
+            "Delete Password is required."
+        );
         return;
     }
 
@@ -6713,7 +6870,8 @@ async function deleteFile(
 
                 body:
                     JSON.stringify({
-                        name
+                        name,
+                        deletePassword
                     })
             }
         );
@@ -6906,278 +7064,542 @@ async function uploadFiles(
 
 
 /* =========================================================
-   CHUNK UPLOAD
+   REAL VERCEL BLOB UPLOAD — SIGNED DIRECT PUT
 ========================================================= */
 
-const CHUNK_SIZE =
-    4 * 1024 * 1024;
+/*
+  The previous build used @vercel/blob/client + /api/blob-upload.
+  Private client-token uploads are currently the fragile part of that flow.
+  This build instead asks our authenticated server for a short-lived, exact
+  pathname-scoped private PUT URL, then sends the file bytes directly to Blob.
+  The Vercel Function never receives the file bytes.
+*/
+
+async function requestSignedBlobUpload(
+    pathname,
+    size,
+    contentType
+){
+
+    const response =
+        await fetch(
+            "/api/blob-upload-url",
+            {
+                method:"POST",
+                credentials:"same-origin",
+                cache:"no-store",
+                headers:{
+                    "Content-Type":"application/json",
+                    "Cache-Control":"no-cache",
+                    "X-Cloud-Upload-Mode":"signed-put-v3"
+                },
+                body:JSON.stringify({
+                    pathname,
+                    size,
+                    contentType:
+                        contentType ||
+                        "application/octet-stream"
+                })
+            }
+        );
+
+    let data = null;
+
+    try{
+        data = await response.json();
+    }catch(_){
+        data = null;
+    }
+
+    if(
+        response.status === 401
+    ){
+        showLogin();
+        throw new Error(
+            "Authentication required"
+        );
+    }
+
+    if(
+        !response.ok ||
+        !data?.uploadUrl
+    ){
+        const serverError =
+            String(
+                data?.error ||
+                ""
+            );
+
+        throw new Error(
+            serverError ||
+            "Could not create a secure Vercel Blob upload URL."
+        );
+    }
+
+    return data;
+}
+
+
+function uploadToSignedUrl(
+    uploadUrl,
+    file,
+    queue
+){
+
+    return new Promise(
+        (resolve,reject) => {
+
+            let attempt = 0;
+            let settled = false;
+
+            const run = () => {
+
+                attempt += 1;
+
+                const xhr =
+                    new XMLHttpRequest();
+
+                xhr.open(
+                    "PUT",
+                    uploadUrl,
+                    true
+                );
+
+                xhr.setRequestHeader(
+                    "Content-Type",
+                    file.type ||
+                    "application/octet-stream"
+                );
+
+                xhr.upload.onprogress =
+                    event => {
+
+                        const total =
+                            Number(
+                                event.total
+                            ) ||
+                            file.size;
+
+                        const loaded =
+                            Math.max(
+                                0,
+                                Math.min(
+                                    file.size,
+                                    Number(
+                                        event.loaded
+                                    ) || 0
+                                )
+                            );
+
+                        const percent =
+                            total > 0
+                                ? Math.max(
+                                    0,
+                                    Math.min(
+                                        100,
+                                        (loaded / total) * 100
+                                    )
+                                )
+                                : 0;
+
+                        updateQueue(
+                            queue,
+                            percent,
+                            false,
+                            loaded,
+                            file.size
+                        );
+                    };
+
+                xhr.onload = () => {
+
+                    if(
+                        xhr.status >= 200 &&
+                        xhr.status < 300
+                    ){
+
+                        if(!settled){
+                            settled = true;
+                            resolve();
+                        }
+
+                        return;
+                    }
+
+                    if(
+                        attempt < 3
+                    ){
+
+                        setTimeout(
+                            run,
+                            800 * attempt
+                        );
+
+                        return;
+                    }
+
+                    if(!settled){
+                        settled = true;
+                        reject(
+                            new Error(
+                                `Blob upload failed (HTTP ${xhr.status}).`
+                            )
+                        );
+                    }
+                };
+
+                xhr.onerror = () => {
+
+                    if(
+                        attempt < 3
+                    ){
+
+                        setTimeout(
+                            run,
+                            800 * attempt
+                        );
+
+                        return;
+                    }
+
+                    if(!settled){
+                        settled = true;
+                        reject(
+                            new Error(
+                                "Network error while uploading to Vercel Blob."
+                            )
+                        );
+                    }
+                };
+
+                xhr.onabort = () => {
+                    if(!settled){
+                        settled = true;
+                        reject(
+                            new Error(
+                                "Upload was cancelled."
+                            )
+                        );
+                    }
+                };
+
+                try{
+                    xhr.send(file);
+                }catch(error){
+
+                    if(
+                        attempt < 3
+                    ){
+
+                        setTimeout(
+                            run,
+                            800 * attempt
+                        );
+
+                        return;
+                    }
+
+                    if(!settled){
+                        settled = true;
+                        reject(error);
+                    }
+                }
+            };
+
+            run();
+        }
+    );
+}
+
+
+async function uploadSmallFallback(
+    pathname,
+    file,
+    queue
+){
+    if(file.size > 4 * 1024 * 1024){
+        throw new Error(
+            "Secure direct upload URL could not be created for this large file. Please verify the Vercel Blob store connection and redeploy."
+        );
+    }
+
+    updateQueue(
+        queue,
+        0,
+        false,
+        0,
+        file.size
+    );
+
+    const xhr =
+        new XMLHttpRequest();
+
+    await new Promise((resolve,reject) => {
+        xhr.open(
+            "POST",
+            "/api/upload-small",
+            true
+        );
+        xhr.withCredentials = true;
+        xhr.setRequestHeader(
+            "Content-Type",
+            "application/octet-stream"
+        );
+        xhr.setRequestHeader(
+            "X-Upload-Pathname",
+            pathname
+        );
+        xhr.setRequestHeader(
+            "X-Upload-Size",
+            String(file.size)
+        );
+        xhr.setRequestHeader(
+            "X-Upload-Content-Type",
+            file.type || "application/octet-stream"
+        );
+
+        xhr.upload.onprogress = event => {
+            const loaded = Number(event.loaded || 0);
+            const total = Number(event.total || file.size) || file.size;
+            const percent = total > 0 ? Math.min(100, (loaded / total) * 100) : 0;
+            updateQueue(
+                queue,
+                percent,
+                false,
+                loaded,
+                file.size
+            );
+        };
+
+        xhr.onload = () => {
+            if(xhr.status >= 200 && xhr.status < 300){
+                resolve();
+                return;
+            }
+            let message = "Upload failed.";
+            try{
+                const data = JSON.parse(xhr.responseText || "{}");
+                message = data.error || message;
+            }catch(_){}
+            reject(new Error(message));
+        };
+
+        xhr.onerror = () => reject(new Error("Network error while uploading."));
+        xhr.onabort = () => reject(new Error("Upload was cancelled."));
+
+        try{
+            xhr.send(file);
+        }catch(error){
+            reject(error);
+        }
+    });
+}
 
 
 async function uploadFile(
     file
 ){
 
-    const total =
-        Math.ceil(
-            file.size /
-            CHUNK_SIZE
+    if(!file || !file.size){
+        throw new Error(
+            "The selected file is empty."
         );
+    }
 
-
-    const id =
-        cryptoRandomId();
-
+    if(
+        file.size >
+        1024 * 1024 * 1024 * 1024
+    ){
+        throw new Error(
+            "This file is larger than the 1 TB application limit."
+        );
+    }
 
     const queue =
         createQueueItem(
             file
         );
 
+    const id =
+        cryptoRandomId();
 
-    let uploaded =
-        0;
+    const relativePath =
+        file.webkitRelativePath ||
+        file.name;
 
+    const folder =
+        relativePath.includes("/")
+            ? relativePath
+                .split("/")
+                .slice(0,-1)
+                .join("/")
+            : "";
 
-    for(
-        let index = 0;
-        index < total;
-        index++
-    ){
+    const safeFolder =
+        folder
+            .split("/")
+            .filter(Boolean)
+            .filter(
+                part =>
+                    part !== "." &&
+                    part !== ".."
+            )
+            .map(
+                part =>
+                    part
+                        .replace(
+                            /[\u0000]/g,
+                            ""
+                        )
+                        .trim()
+                        .slice(0,180)
+            )
+            .filter(Boolean)
+            .join("/");
 
-        const start =
-            index *
-            CHUNK_SIZE;
-
-
-        const end =
-            Math.min(
-                file.size,
-                start +
-                CHUNK_SIZE
-            );
-
-
-        const blob =
-            file.slice(
-                start,
-                end
-            );
-
-
-        const params =
-            new URLSearchParams({
-
-                id,
-
-                index:
-                    String(index),
-
-                total:
-                    String(total),
-
-                size:
-                    String(file.size),
-
-                name:
-                    file.name,
-
-                relativePath:
-                    (file.webkitRelativePath || file.name)
-            });
-
-
-        await uploadChunkWithProgress(
-            "/api/upload-chunk?" +
-            params.toString(),
-            blob,
-            (loaded) => {
-
-                const currentUploaded =
-                    uploaded + loaded;
-
-                const percent =
-                    file.size
-                        ? currentUploaded /
-                            file.size *
-                            100
-                        : 100;
-
-                updateQueue(
-                    queue,
-                    percent,
-                    false,
-                    currentUploaded,
-                    file.size
-                );
-            }
+    const pathname =
+        `my-personal-cloud/files/${id}/` +
+        (
+            safeFolder
+                ? `${safeFolder}/`
+                : ""
+        ) +
+        encodeURIComponent(
+            file.name
         );
-
-
-        uploaded +=
-            blob.size;
-
-
-        updateQueue(
-            queue,
-            file.size
-                ? uploaded /
-                    file.size *
-                    100
-                : 100,
-            false,
-            uploaded,
-            file.size
-        );
-    }
-
 
     updateQueue(
         queue,
-        100,
-        true,
-        file.size,
+        0,
+        false,
+        0,
         file.size
     );
 
-
-    rememberRecent(
-        file.name
-    );
-
-
     try{
-        await loadStorage();
-    }catch(error){
-        console.error(
-            "STORAGE REFRESH AFTER UPLOAD ERROR:",
-            error
+
+        let uploadedDirectly = false;
+
+        try{
+            const signed =
+                await requestSignedBlobUpload(
+                    pathname,
+                    file.size,
+                    file.type ||
+                        "application/octet-stream"
+                );
+
+            await uploadToSignedUrl(
+                signed.uploadUrl,
+                file,
+                queue
+            );
+
+            uploadedDirectly = true;
+        }catch(signedError){
+            console.warn(
+                "SIGNED BLOB UPLOAD FAILED; USING SMALL-FILE FALLBACK WHEN POSSIBLE:",
+                signedError
+            );
+
+            if(file.size > 4 * 1024 * 1024){
+                throw signedError;
+            }
+
+            await uploadSmallFallback(
+                pathname,
+                file,
+                queue
+            );
+        }
+
+        /*
+          Verify the completed Blob from the server before the UI says that
+          the file is safely stored. Only this tiny JSON request reaches the
+          Vercel Function; the file bytes go directly to Blob.
+        */
+        await api(
+            "/api/register-upload",
+            {
+                method:"POST",
+                headers:{
+                    "Content-Type":
+                        "application/json"
+                },
+                body:JSON.stringify({
+                    pathname,
+                    size:file.size,
+                    name:file.name
+                })
+            }
         );
+
+        updateQueue(
+            queue,
+            100,
+            true,
+            file.size,
+            file.size
+        );
+
+        rememberRecent(
+            file.name
+        );
+
+        try{
+            await loadEverything();
+        }catch(error){
+            console.error(
+                "POST-UPLOAD REFRESH ERROR:",
+                error
+            );
+        }
+
+        showToast(
+            `${file.name} uploaded`
+        );
+
+    }catch(error){
+
+        updateQueue(
+            queue,
+            0,
+            false,
+            0,
+            file.size
+        );
+
+        throw error;
     }
-
-
-    showToast(
-        `${file.name} uploaded`
-    );
 }
 
 
-function uploadChunkWithProgress(
-    url,
-    blob,
-    onProgress
+async function uploadFiles(
+    files
 ){
 
-    return new Promise(
-        (resolve, reject) => {
+    for(
+        const file of files
+    ){
 
-            const xhr =
-                new XMLHttpRequest();
+        try{
 
-            xhr.open(
-                "POST",
-                url,
-                true
+            await uploadFile(
+                file
             );
 
-            xhr.withCredentials =
-                true;
+        }catch(error){
 
-            xhr.setRequestHeader(
-                "Content-Type",
-                "application/octet-stream"
+            console.error(
+                error
             );
 
-            xhr.setRequestHeader(
-                "Content-Length",
-                String(blob.size)
+            alert(
+                `${file.name}: ${error.message}`
             );
-
-            xhr.upload.onprogress =
-                event => {
-
-                    if(
-                        event.lengthComputable
-                    ){
-
-                        onProgress(
-                            event.loaded
-                        );
-                    }
-                };
-
-            xhr.onerror =
-                () => {
-                    reject(
-                        new Error(
-                            "Network error during upload"
-                        )
-                    );
-                };
-
-            xhr.onabort =
-                () => {
-                    reject(
-                        new Error(
-                            "Upload cancelled"
-                        )
-                    );
-                };
-
-            xhr.onload =
-                async () => {
-
-                    let data = null;
-
-                    try{
-                        data =
-                            JSON.parse(
-                                xhr.responseText ||
-                                "null"
-                            );
-                    }catch(_){ }
-
-                    if(
-                        xhr.status === 401
-                    ){
-
-                        showLogin();
-
-                        reject(
-                            new Error(
-                                "Session expired"
-                            )
-                        );
-
-                        return;
-                    }
-
-                    if(
-                        xhr.status < 200 ||
-                        xhr.status >= 300
-                    ){
-
-                        reject(
-                            new Error(
-                                data?.error ||
-                                "Upload failed"
-                            )
-                        );
-
-                        return;
-                    }
-
-                    onProgress(
-                        blob.size
-                    );
-
-                    resolve(data);
-                };
-
-            xhr.send(blob);
         }
-    );
+    }
 }
-
 
 
 /* =========================================================
@@ -7568,325 +7990,5 @@ async function refreshAll(){
                 );
 
             },
-            650
-        );
-    }
-}
-
-
-document
-    .getElementById(
-        "refreshButton"
-    )
-    .addEventListener(
-        "click",
-        refreshAll
-    );
-
-
-document
-    .getElementById(
-        "topRefresh"
-    )
-    .addEventListener(
-        "click",
-        refreshAll
-    );
-
-
-/* =========================================================
-   QR
-========================================================= */
-
-function openQRCode(){
-
-    qrCode.innerHTML =
-        "";
-
-
-    if(
-        typeof QRCode ===
-        "undefined"
-    ){
-
-        qrCode.textContent =
-            "QR unavailable";
-
-
-        showToast(
-            "QR code library unavailable"
-        );
-
-
-        qrModal.classList.add(
-            "show"
-        );
-
-
-        return;
-    }
-
-
-    const websiteURL =
-        window.location.href;
-
-
-    new QRCode(
-        qrCode,
-        {
-
-            text:
-                websiteURL,
-
-            width:
-                164,
-
-            height:
-                164,
-
-            colorDark:
-                "#07111f",
-
-            colorLight:
-                "#ffffff",
-
-            correctLevel:
-                QRCode.CorrectLevel.M
-        }
-    );
-
-
-    qrModal.classList.add(
-        "show"
-    );
-}
-
-
-function closeQRCode(){
-
-    qrModal.classList.remove(
-        "show"
-    );
-
-    qrCode.innerHTML =
-        "";
-}
-
-
-qrButton.addEventListener(
-    "click",
-    openQRCode
-);
-
-
-qrClose.addEventListener(
-    "click",
-    closeQRCode
-);
-
-
-qrModal.addEventListener(
-    "click",
-    event => {
-
-        if(
-            event.target ===
-            qrModal
-        ){
-
-            closeQRCode();
-        }
-    }
-);
-
-
-/* =========================================================
-   LOAD EVERYTHING
-========================================================= */
-
-async function loadEverything(){
-
-    try{
-
-        await Promise.all([
-            loadStorage(),
-            loadFiles()
-        ]);
-
-    }catch(error){
-
-        console.error(
-            error
-        );
-    }
-}
-
-
-/* =========================================================
-   FORMAT BYTES
-========================================================= */
-
-function formatBytes(
-    bytes
-){
-
-    const value =
-        Number(bytes);
-
-
-    if(
-        !Number.isFinite(value) ||
-        value <= 0
-    ){
-
-        return "0 B";
-    }
-
-
-    const units = [
-        "B",
-        "KB",
-        "MB",
-        "GB",
-        "TB"
-    ];
-
-
-    const index =
-        Math.min(
-            Math.floor(
-                Math.log(value) /
-                Math.log(1024)
-            ),
-            units.length - 1
-        );
-
-
-    return (
-        value /
-        Math.pow(
-            1024,
-            index
-        )
-    )
-        .toFixed(
-            index === 0
-                ? 0
-                : 1
-        ) +
-        " " +
-        units[index];
-}
-
-
-/* =========================================================
-   ESCAPE
-========================================================= */
-
-function escapeHtml(
-    value
-){
-
-    return String(value)
-
-        .replace(
-            /&/g,
-            "&amp;"
-        )
-
-        .replace(
-            /</g,
-            "&lt;"
-        )
-
-        .replace(
-            />/g,
-            "&gt;"
-        )
-
-        .replace(
-            /"/g,
-            "&quot;"
-        )
-
-        .replace(
-            /'/g,
-            "&#039;"
-        );
-}
-
-
-/* =========================================================
-   KEYBOARD
-========================================================= */
-
-document.addEventListener(
-    "keydown",
-    event => {
-
-        if(
-            event.key ===
-            "Escape"
-        ){
-
-            closeViewer();
-
-            closeQRCode();
-        }
-
-
-        if(
-            event.key === "/" &&
-
-            document.activeElement !==
-                searchInput &&
-
-            document.activeElement !==
-                password
-        ){
-
-            event.preventDefault();
-
-            searchInput.focus();
-        }
-    }
-);
-
-
-/* =========================================================
-   WELCOME / START
-========================================================= */
-
-window.addEventListener(
-    "load",
-    () => {
-
-        setTimeout(
-            welcomeVoice,
-            450
-        );
-
-
-        setTimeout(
-            () => {
-
-                intro.classList.add(
-                    "hide"
-                );
-
-
-                checkAuthentication();
-
-            },
-            2500
-        );
-    }
-);
-
-</script>
-
-</body>
-    </html>
-
-
-    
+            
+Preview truncated for large file
