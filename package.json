@@ -1,8 +1,8 @@
 {
   "name": "cloud-zen-vercel",
-  "version": "7.0.0",
+  "version": "7.1.0",
   "private": true,
-  "description": "My Personal Cloud / Cloud-Zen — original mobile UI with Vercel Blob Private Storage",
+  "description": "My Personal Cloud / Cloud-Zen \u2014 original mobile UI with Vercel Blob Private Storage",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -13,9 +13,10 @@
     "node": "24.x"
   },
   "dependencies": {
-    "@vercel/blob": "^2.6.1",
+    "@vercel/blob": "^2.8.0",
     "archiver": "^7.0.1",
     "express": "^5.1.0",
     "teleproto": "^1.229.0"
   }
 }
+
