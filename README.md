@@ -36,3 +36,5 @@ PDF opens inside the built-in viewer instead of forcing a download.
 Existing image/video/audio preview remains supported.
 Important
 Telegram credentials/session are user-owned secrets. Do not commit them to GitHub or place them in the HTML.
+Telegram session concurrency note
+This Vercel-targeted build keeps Telegram-backed dashboard requests sequential on the browser side and limits the Telegram client's download concurrency. The same TELEGRAM_SESSION must not be used by another running deployment or local process at the same time. If Telegram has already returned AUTH_KEY_DUPLICATED, that session has been invalidated by Telegram and a fresh session string must be generated and placed in Vercel; do not paste the session string into chat or source code.
