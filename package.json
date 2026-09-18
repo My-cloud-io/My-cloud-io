@@ -1,8 +1,8 @@
 {
-  "name": "cloud-zen-vercel",
-  "version": "7.2.0",
+  "name": "cloud-zen",
+  "version": "3.3.0",
   "private": true,
-  "description": "My Personal Cloud / Cloud-Zen \u2014 original mobile UI with Vercel Blob Private Storage",
+  "description": "Cloud-Zen Vercel + Telegram private cloud with fast indexed listing, 4MB uploads, file menus, rename/share/delete password and PDF preview.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -13,7 +13,6 @@
     "node": "24.x"
   },
   "dependencies": {
-    "@vercel/blob": "^2.6.1",
     "archiver": "^7.0.1",
     "express": "^5.1.0",
     "teleproto": "^1.229.0"
