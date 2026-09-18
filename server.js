@@ -45,9 +45,10 @@ const TELEGRAM_API_HASH = String(process.env.TELEGRAM_API_HASH || "").trim();
 const TELEGRAM_SESSION = String(process.env.TELEGRAM_SESSION || "").trim();
 const TELEGRAM_STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || "me").trim();
 
-// Vercel Functions accept requests only up to a few MB. Keep this fixed so an
-// old CHUNK_SIZE environment variable can never make browser requests too large.
-const CHUNK_SIZE = 4 * 1024 * 1024;
+const CHUNK_SIZE = Math.max(
+  4 * 1024 * 1024,
+  Math.min(Number(process.env.CHUNK_SIZE || 64 * 1024 * 1024), 512 * 1024 * 1024)
+);
 const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 20 * 1024 * 1024 * 1024 * 1024);
 const MAX_CHUNKS = 100000;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -55,7 +56,7 @@ const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 3;
 
 if (!APP_PASSWORD || !DELETE_PASSWORD || !SESSION_SECRET) {
-  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in the deployment environment.");
+  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in Render.");
 }
 if (!TELEGRAM_API_ID || !TELEGRAM_API_HASH || !TELEGRAM_SESSION) {
   console.warn("[Cloud-Zen] Telegram MTProto credentials are not fully configured.");
@@ -107,8 +108,6 @@ async function getTelegramClient() {
       retryDelay: 1000,
       autoReconnect: true,
       requestRetries: 5,
-      sequentialUpdates: true,
-      maxConcurrentDownloads: 1,
       downloadPool: {
         poolSize: 4,
         workers: 8,
@@ -132,11 +131,7 @@ async function getTelegramClient() {
   } catch (error) {
     telegramReady = false;
     telegramLastError = error?.message || String(error);
-    if (String(telegramLastError).includes("AUTH_KEY_DUPLICATED")) {
-      console.error("[Cloud-Zen] Telegram session was invalidated because the same MTProto session is being used by more than one main connection. Stop other deployments/processes using this session and generate a fresh Telegram session.");
-    } else {
-      console.error("[Cloud-Zen] Telegram connection error:", telegramLastError);
-    }
+    console.error("[Cloud-Zen] Telegram connection error:", telegramLastError);
     throw error;
   } finally {
     telegramInitPromise = null;
@@ -409,13 +404,11 @@ function parseChunkCaption(text) {
 ========================= */
 let fileIndex = new Map();
 let indexLoaded = false;
-let indexLoadedAt = 0;
 let indexPromise = null;
-const INDEX_TTL_MS = 2 * 60 * 1000;
 
 async function rebuildIndex(force = false) {
   if (indexPromise && !force) return indexPromise;
-  if (indexLoaded && !force && (Date.now() - indexLoadedAt) < INDEX_TTL_MS) return fileIndex;
+  if (indexLoaded && !force) return fileIndex;
 
   indexPromise = (async () => {
     const client = await getTelegramClient();
@@ -423,10 +416,7 @@ async function rebuildIndex(force = false) {
 
     // Telegram history is the durable index. Only messages with our CZ1
     // marker are considered storage records.
-    // Search Telegram server-side for our unique caption marker instead of scanning
-    // the entire Saved Messages history. This is much faster once the account has
-    // a large amount of unrelated history.
-    for await (const message of client.iterMessages(TELEGRAM_STORAGE_CHAT, { search: "CZ1", limit: undefined, waitTime: 0 })) {
+    for await (const message of client.iterMessages(TELEGRAM_STORAGE_CHAT, { limit: 0 })) {
       const parsed = parseChunkCaption(message?.message || message?.text || "");
       if (!parsed || !Number.isInteger(parsed.index) || parsed.index < 0) continue;
       if (!message.id) continue;
@@ -464,7 +454,6 @@ async function rebuildIndex(force = false) {
 
     fileIndex = next;
     indexLoaded = true;
-    indexLoadedAt = Date.now();
     return fileIndex;
   })();
 
@@ -497,7 +486,6 @@ app.get("/api/health", async (req, res) => {
       storage: "Cloud Storage",
       persistent: true,
       multipart: true,
-      chunkSizeBytes: CHUNK_SIZE,
       telegram: { configured: true, connected: telegramReady }
     });
   } catch (error) {
@@ -628,7 +616,6 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
         modified: new Date().toISOString()
       });
       indexLoaded = true;
-      indexLoadedAt = Date.now();
       activeUploads.delete(uploadKey);
     }
 
@@ -726,11 +713,7 @@ async function streamFileToResponse(req, res, meta, inline) {
   res.setHeader("Content-Type", mimeFor(meta.name));
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
-  if (mimeFor(meta.name) === "application/pdf" && inline) {
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
-  }
-  res.setHeader("Cache-Control", "private, max-age=3600, stale-while-revalidate=86400");
+  res.setHeader("Cache-Control", "private, no-store");
   res.setHeader("Content-Length", String(end - start + 1));
   if (partial) res.setHeader("Content-Range", `bytes ${start}-${end}/${totalSize}`);
 
@@ -837,8 +820,6 @@ app.patch("/api/files", requireAuth, async (req, res) => {
     const renamed = { ...file, name: newName, modified: new Date().toISOString() };
     fileIndex.delete(oldName);
     fileIndex.set(newName, renamed);
-    indexLoaded = true;
-    indexLoadedAt = Date.now();
     return res.json({ ok: true, file: publicFile(renamed) });
   } catch (error) {
     console.error("RENAME ERROR:", error);
@@ -941,8 +922,6 @@ app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) =>
     if (ids.length) await deleteTelegramMessages(ids);
 
     fileIndex.delete(name);
-    indexLoaded = true;
-    indexLoadedAt = Date.now();
     res.json({ ok: true, name, message: "File permanently deleted" });
   } catch (error) {
     console.error("DELETE ERROR:", error);
@@ -1022,4 +1001,3 @@ app.listen(PORT, HOST, () => {
   console.log(`[Cloud-Zen] Server running on ${HOST}:${PORT}`);
   console.log(`[Cloud-Zen] Chunk size: ${formatBytes(CHUNK_SIZE)}`);
 });
-  
