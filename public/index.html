@@ -3370,44 +3370,6 @@ input[type="password"]::placeholder{
         </section>
 
 
-        <section
-            id="storageDetailsCard"
-            class="storageDetailsCard"
-        >
-
-            <div class="storageDetailsHead">
-
-                <div>
-
-                    <h2 class="storageDetailsTitle">
-                        Storage Locations
-                    </h2>
-
-                    <p class="storageDetailsSub">
-                        See used space and free space for every connected cloud.
-                    </p>
-
-                </div>
-
-                <button
-                    id="storageDetailsRefresh"
-                    class="storageDetailsRefresh"
-                    type="button"
-                >
-                    Refresh
-                </button>
-
-            </div>
-
-
-            <div
-                id="storageProviderGrid"
-                class="storageProviderGrid"
-            ></div>
-
-        </section>
-
-
         <div class="cloudToolbar">
 
             <div class="searchBox">
@@ -4915,155 +4877,6 @@ async function loadStorage(){
 }
 
 
-function renderStorageProviders(data){
-
-    if(!storageProviderGrid){
-        return;
-    }
-
-
-    const providers = [
-
-        {
-            key:"b2",
-            name:"Backblaze B2",
-            data:data.b2 || {}
-        },
-
-        {
-            key:"mega",
-            name:"MEGA",
-            data:data.mega || {}
-        },
-
-        {
-            key:"idriveE2",
-            name:"IDrive E2",
-            data:data.idriveE2 || {}
-        },
-
-        {
-            key:"cloudinary",
-            name:"Cloudinary",
-            data:data.cloudinary || {}
-        },
-
-        {
-            key:"filebase",
-            name:"Filebase",
-            data:data.filebase || {}
-        },
-
-        {
-            key:"koofr",
-            name:"Koofr",
-            data:data.koofr || {}
-        }
-    ];
-
-
-    storageProviderGrid.innerHTML = "";
-
-
-    providers.forEach(provider => {
-
-        const item =
-            document.createElement("div");
-
-        item.className =
-            "storageProvider";
-
-
-        const configured =
-            provider.data.configured !== false;
-
-        const connected =
-            provider.data.connected !== false;
-
-        const used =
-            Number(
-                provider.data.usedBytes ??
-                provider.data.totalBytes ??
-                0
-            );
-
-        const capacity =
-            Number(
-                provider.data.capacityBytes ??
-                provider.data.limitBytes ??
-                0
-            );
-
-        const remaining =
-            Number(
-                provider.data.remainingBytes ??
-                Math.max(0, capacity - used)
-            );
-
-        const percent =
-            capacity > 0
-                ? Math.min(
-                    100,
-                    (used / capacity) * 100
-                )
-                : 0;
-
-        const safePercent =
-            Number(percent.toFixed(2));
-
-        let statusText = "Connected";
-        let statusClass = "";
-
-        if(!configured){
-            statusText = "Not configured";
-            statusClass = "unconfigured";
-        }else if(!connected){
-            statusText = "Not connected";
-            statusClass = "offline";
-        }else if(safePercent >= 99.5){
-            statusText = "Near storage limit";
-            statusClass = "offline";
-        }
-
-
-        item.innerHTML = `
-            <div class="storageProviderTop">
-                <div class="storageProviderName">
-                    ${escapeHtml(provider.name)}
-                </div>
-                <div class="storageProviderPercent">
-                    ${configured ? safePercent : 0}%
-                </div>
-            </div>
-
-            <div class="storageProviderBar">
-                <div
-                    class="storageProviderFill"
-                    style="width:${configured ? safePercent : 0}%"
-                ></div>
-            </div>
-
-            <div class="storageProviderMeta">
-                <span>Used: ${escapeHtml(
-                    provider.data.usedText ||
-                    formatClientBytes(used)
-                )}</span>
-                <span>Free: ${escapeHtml(
-                    provider.data.remainingText ||
-                    formatClientBytes(remaining)
-                )}</span>
-            </div>
-
-            <div class="storageProviderStatus ${statusClass}">
-                ${escapeHtml(statusText)}
-            </div>
-        `;
-
-        storageProviderGrid.appendChild(item);
-    });
-}
-
-
 function formatClientBytes(bytes){
 
     const value = Number(bytes) || 0;
@@ -5089,30 +4902,6 @@ function formatClientBytes(bytes){
 }
 
 
-
-/* =========================================================
-   STORAGE ACCORDION — COLLAPSE LONG PROVIDER LIST
-========================================================= */
-(function initStorageAccordion(){
-    const detailsCard = document.getElementById("storageDetailsCard");
-    const head = detailsCard?.querySelector(".storageDetailsHead");
-    if(!detailsCard || !head) return;
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "storageAccordionButton";
-    button.innerHTML = `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`;
-
-    button.addEventListener("click", () => {
-        const collapsed = detailsCard.classList.toggle("storageCompact");
-        button.innerHTML = collapsed
-            ? `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`
-            : `Hide <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌃</span>`;
-    });
-
-    head.appendChild(button);
-    detailsCard.classList.add("storageCompact");
-})();
 
 storageDetailsRefresh?.addEventListener(
     "click",
@@ -5986,6 +5775,26 @@ function createFileCard(
     );
 
 
+    const rename =
+        document.createElement(
+            "button"
+        );
+
+    rename.className =
+        "fileAction";
+
+    rename.textContent =
+        "Rename";
+
+    rename.addEventListener(
+        "click",
+        () =>
+            renameFile(
+                file
+            )
+    );
+
+
     const del =
         document.createElement(
             "button"
@@ -6002,7 +5811,8 @@ function createFileCard(
         "click",
         () =>
             deleteFile(
-                file.name
+                file.name,
+                file.pathname
             )
     );
 
@@ -6043,6 +5853,7 @@ function createFileCard(
         open,
         download,
         share,
+        rename,
         more
     );
 
@@ -6684,7 +6495,8 @@ function closeViewer(){
 ========================================================= */
 
 async function deleteFile(
-    name
+    name,
+    pathname = ""
 ){
 
     const ok =
@@ -6692,69 +6504,117 @@ async function deleteFile(
             `Delete "${name}" permanently?`
         );
 
-
     if(!ok){
         return;
     }
 
+    const deletePassword =
+        window.prompt(
+            "Enter delete password to permanently delete this file:"
+        );
+
+    if(deletePassword === null){
+        return;
+    }
+
+    if(!deletePassword.trim()){
+        alert(
+            "Delete password is required."
+        );
+        return;
+    }
 
     try{
-
         await api(
             "/api/files",
             {
-
                 method:"DELETE",
-
                 headers:{
-                    "Content-Type":
-                        "application/json"
+                    "Content-Type":"application/json"
                 },
-
-                body:
-                    JSON.stringify({
-                        name
-                    })
+                body:JSON.stringify({
+                    name,
+                    pathname,
+                    deletePassword
+                })
             }
         );
 
+        starred.delete(name);
+        writeJSON(STAR_KEY,[...starred]);
 
-        starred.delete(
-            name
-        );
+        recent = recent.filter(item => item !== name);
+        writeJSON(RECENT_KEY,recent);
 
-
-        writeJSON(
-            STAR_KEY,
-            [...starred]
-        );
-
-
-        recent =
-            recent.filter(
-                item =>
-                    item !== name
-            );
-
-
-        writeJSON(
-            RECENT_KEY,
-            recent
-        );
-
-
-        showToast(
-            "File deleted"
-        );
-
-
+        showToast("File deleted");
         await loadEverything();
-
     }catch(error){
+        alert(error.message);
+    }
+}
 
-        alert(
-            error.message
+
+/* =========================================================
+   RENAME
+========================================================= */
+
+async function renameFile(
+    file
+){
+
+    const currentName =
+        String(file?.name || "file");
+
+    const nextName =
+        window.prompt(
+            "Enter the new name:",
+            currentName
         );
+
+    if(nextName === null){
+        return;
+    }
+
+    const trimmed = nextName.trim();
+
+    if(!trimmed){
+        alert("File name cannot be empty.");
+        return;
+    }
+
+    if(trimmed === currentName){
+        return;
+    }
+
+    try{
+        await api(
+            "/api/files",
+            {
+                method:"PATCH",
+                headers:{
+                    "Content-Type":"application/json"
+                },
+                body:JSON.stringify({
+                    name:currentName,
+                    newName:trimmed,
+                    pathname:String(file?.pathname || "")
+                })
+            }
+        );
+
+        starred.delete(currentName);
+        starred.add(trimmed);
+        writeJSON(STAR_KEY,[...starred]);
+
+        recent = recent.map(
+            item => item === currentName ? trimmed : item
+        );
+        writeJSON(RECENT_KEY,recent);
+
+        showToast("File renamed");
+        await loadEverything();
+    }catch(error){
+        alert(error.message);
     }
 }
 
@@ -6917,233 +6777,59 @@ async function uploadFiles(
   The Vercel Function never receives the file bytes.
 */
 
-async function requestSignedBlobUpload(
-    pathname,
-    size,
-    contentType
-){
+let vercelBlobClientModule = null;
 
-    const response =
-        await fetch(
-            "/api/blob-upload-url",
-            {
-                method:"POST",
-                credentials:"same-origin",
-                headers:{
-                    "Content-Type":"application/json"
-                },
-                body:JSON.stringify({
-                    pathname,
-                    size,
-                    contentType:
-                        contentType ||
-                        "application/octet-stream"
-                })
-            }
-        );
-
-    let data = null;
-
-    try{
-        data = await response.json();
-    }catch(_){
-        data = null;
+async function getVercelBlobClient(){
+    if(vercelBlobClientModule){
+        return vercelBlobClientModule;
     }
-
-    if(
-        response.status === 401
-    ){
-        showLogin();
-        throw new Error(
-            "Authentication required"
-        );
-    }
-
-    if(
-        !response.ok ||
-        !data?.uploadUrl
-    ){
-        throw new Error(
-            data?.error ||
-            "Could not create a secure Vercel Blob upload URL."
-        );
-    }
-
-    return data;
+    vercelBlobClientModule = import(
+        "https://esm.sh/@vercel/blob@2.6.1/client?bundle"
+    );
+    return vercelBlobClientModule;
 }
 
-
-function uploadToSignedUrl(
-    uploadUrl,
+async function uploadWithVercelMultipart(
+    pathname,
     file,
     queue
 ){
+    const module = await getVercelBlobClient();
 
-    return new Promise(
-        (resolve,reject) => {
+    if(typeof module.upload !== "function"){
+        throw new Error(
+            "Large-file upload module could not be loaded. Please refresh and try again."
+        );
+    }
 
-            let attempt = 0;
-            let settled = false;
-
-            const run = () => {
-
-                attempt += 1;
-
-                const xhr =
-                    new XMLHttpRequest();
-
-                xhr.open(
-                    "PUT",
-                    uploadUrl,
-                    true
+    return module.upload(
+        pathname,
+        file,
+        {
+            access:"private",
+            handleUploadUrl:"/api/blob-upload",
+            clientPayload:JSON.stringify({
+                id:cryptoRandomId(),
+                size:file.size,
+                name:file.name,
+                relativePath:file.webkitRelativePath || ""
+            }),
+            multipart:true,
+            onUploadProgress:event => {
+                const percentage = Number(event?.percentage) || 0;
+                const loaded = Number(event?.loaded) || 0;
+                const total = Number(event?.total) || file.size;
+                updateQueue(
+                    queue,
+                    percentage,
+                    false,
+                    loaded,
+                    total
                 );
-
-                xhr.setRequestHeader(
-                    "Content-Type",
-                    file.type ||
-                    "application/octet-stream"
-                );
-
-                xhr.upload.onprogress =
-                    event => {
-
-                        const total =
-                            Number(
-                                event.total
-                            ) ||
-                            file.size;
-
-                        const loaded =
-                            Math.max(
-                                0,
-                                Math.min(
-                                    file.size,
-                                    Number(
-                                        event.loaded
-                                    ) || 0
-                                )
-                            );
-
-                        const percent =
-                            total > 0
-                                ? Math.max(
-                                    0,
-                                    Math.min(
-                                        100,
-                                        (loaded / total) * 100
-                                    )
-                                )
-                                : 0;
-
-                        updateQueue(
-                            queue,
-                            percent,
-                            false,
-                            loaded,
-                            file.size
-                        );
-                    };
-
-                xhr.onload = () => {
-
-                    if(
-                        xhr.status >= 200 &&
-                        xhr.status < 300
-                    ){
-
-                        if(!settled){
-                            settled = true;
-                            resolve();
-                        }
-
-                        return;
-                    }
-
-                    if(
-                        attempt < 3
-                    ){
-
-                        setTimeout(
-                            run,
-                            800 * attempt
-                        );
-
-                        return;
-                    }
-
-                    if(!settled){
-                        settled = true;
-                        reject(
-                            new Error(
-                                `Blob upload failed (HTTP ${xhr.status}).`
-                            )
-                        );
-                    }
-                };
-
-                xhr.onerror = () => {
-
-                    if(
-                        attempt < 3
-                    ){
-
-                        setTimeout(
-                            run,
-                            800 * attempt
-                        );
-
-                        return;
-                    }
-
-                    if(!settled){
-                        settled = true;
-                        reject(
-                            new Error(
-                                "Network error while uploading to Vercel Blob."
-                            )
-                        );
-                    }
-                };
-
-                xhr.onabort = () => {
-                    if(!settled){
-                        settled = true;
-                        reject(
-                            new Error(
-                                "Upload was cancelled."
-                            )
-                        );
-                    }
-                };
-
-                try{
-                    xhr.send(file);
-                }catch(error){
-
-                    if(
-                        attempt < 3
-                    ){
-
-                        setTimeout(
-                            run,
-                            800 * attempt
-                        );
-
-                        return;
-                    }
-
-                    if(!settled){
-                        settled = true;
-                        reject(error);
-                    }
-                }
-            };
-
-            run();
+            }
         }
     );
 }
-
 
 async function uploadFile(
     file
@@ -7157,10 +6843,10 @@ async function uploadFile(
 
     if(
         file.size >
-        1024 * 1024 * 1024 * 1024
+        5 * 1024 * 1024 * 1024 * 1024
     ){
         throw new Error(
-            "This file is larger than the 1 TB application limit."
+            "This file is larger than the 5 TB application limit."
         );
     }
 
@@ -7227,16 +6913,8 @@ async function uploadFile(
 
     try{
 
-        const signed =
-            await requestSignedBlobUpload(
-                pathname,
-                file.size,
-                file.type ||
-                    "application/octet-stream"
-            );
-
-        await uploadToSignedUrl(
-            signed.uploadUrl,
+        await uploadWithVercelMultipart(
+            pathname,
             file,
             queue
         );
