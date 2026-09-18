@@ -19,45 +19,11 @@ const crypto = require("crypto");
 const { Readable } = require("stream");
 const archiver = require("archiver");
 const { put, get, list, del, head, copy, issueSignedToken, presignUrl } = require("@vercel/blob");
+const { handleUpload } = require("@vercel/blob/client");
 
 const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
-
-/*
-   SMALL-FILE FALLBACK UPLOAD
-   This route is intentionally registered before express.json() so binary
-   file bytes are never interpreted as JSON. It is only used as a fallback
-   for files up to 4 MB; larger files continue through the direct signed Blob
-   upload path so the Vercel Function request limit is not exceeded.
-*/
-app.post("/api/upload-small", express.raw({ type: "*/*", limit: "4mb" }), requireAuth, async (req, res) => {
-  try {
-    const pathname = String(req.headers["x-upload-pathname"] || "");
-    const size = Number(req.headers["x-upload-size"] || 0);
-    const contentType = String(req.headers["x-upload-content-type"] || "application/octet-stream").slice(0, 180);
-
-    if (!pathname.startsWith(FILE_PREFIX)) return jsonError(res, 400, "Invalid upload path");
-    if (!Number.isSafeInteger(size) || size <= 0 || size > 4 * 1024 * 1024) {
-      return jsonError(res, 413, "Small upload fallback is limited to 4 MB.");
-    }
-    if (!Buffer.isBuffer(req.body) || req.body.length !== size) {
-      return jsonError(res, 400, "Upload size verification failed.");
-    }
-
-    const blob = await put(pathname, req.body, {
-      access: "private",
-      addRandomSuffix: false,
-      allowOverwrite: false,
-      contentType
-    });
-
-    res.json({ ok: true, blob, pathname: blob.pathname, size: blob.size, contentType: blob.contentType });
-  } catch (error) {
-    console.error("SMALL UPLOAD ERROR:", error?.stack || error);
-    return jsonError(res, 400, error?.message || "Upload failed");
-  }
-});
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = "0.0.0.0";
@@ -446,27 +412,23 @@ app.post("/api/blob-upload-url", requireAuth, async (req, res) => {
     // A short-lived URL is scoped to this exact pathname and PUT operation.
     // The file bytes go directly from the browser to Vercel Blob, never through
     // the Vercel Function, so the Function 4.5 MB request limit is avoided.
-    const tokenOptions = {
+    const token = await issueSignedToken({
       pathname,
       operations: ["put"],
-      validUntil: Date.now() + 24 * 60 * 60 * 1000
-    };
-    if (process.env.BLOB_READ_WRITE_TOKEN) {
-      tokenOptions.token = process.env.BLOB_READ_WRITE_TOKEN;
-    }
-    const token = await issueSignedToken(tokenOptions);
+      validUntil: Date.now() + 15 * 60 * 1000
+    });
 
     const signed = await presignUrl(token, {
       pathname,
       operation: "put",
-      validUntil: Date.now() + 24 * 60 * 60 * 1000
+      validUntil: Date.now() + 15 * 60 * 1000
     });
 
     res.json({
       ok: true,
       pathname,
       uploadUrl: signed.presignedUrl,
-      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      expiresAt: Date.now() + 15 * 60 * 1000,
       contentType
     });
   } catch (error) {
@@ -479,18 +441,51 @@ app.post("/api/blob-upload-url", requireAuth, async (req, res) => {
   }
 });
 
-/*
- * Legacy client-token endpoint intentionally disabled.
- * Uploads use the signed PUT endpoint above so private Blob uploads do not
- * depend on @vercel/blob/client token retrieval.
- */
-app.post("/api/blob-upload", requireAuth, (req, res) => {
-  return jsonError(res, 410, "Legacy Blob client-token upload is disabled. Refresh the website to use signed direct upload.");
+app.post("/api/blob-upload", requireAuth, async (req, res) => {
+  try {
+    const body = req.body;
+    const result = await handleUpload({
+      body,
+      request: req,
+      onBeforeGenerateToken: async (pathname, clientPayload, multipart) => {
+        if (!String(pathname).startsWith(FILE_PREFIX)) throw new Error("Invalid upload path");
+        let payload = {};
+        try { payload = JSON.parse(String(clientPayload || "{}")); } catch { throw new Error("Invalid upload metadata"); }
+        const size = Number(payload.size || 0);
+        if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_FILE_SIZE) {
+          throw new Error(`File size must be between 1 byte and ${formatBytes(MAX_FILE_SIZE)}`);
+        }
+        return {
+          allowedContentTypes: ["*/*"],
+          addRandomSuffix: false,
+          access: "private",
+          multipart: Boolean(multipart),
+          tokenPayload: JSON.stringify({
+            id: String(payload.id || ""),
+            size,
+            name: cleanName(payload.name),
+            relativePath: cleanRelativePath(payload.relativePath)
+          })
+        };
+      },
+      onUploadCompleted: async () => {
+        // Blob is the durable source of truth. Completed objects are not auto-deleted.
+      }
+    });
+    res.json(result);
+  } catch (error) {
+    console.error("BLOB CLIENT UPLOAD ERROR:", error?.stack || error);
+    const message = String(error?.message || error);
+    if (/No blob credentials|credentials found|BLOB_READ_WRITE_TOKEN|oidcToken|BLOB_STORE_ID/i.test(message)) {
+      return jsonError(res, 503, "Vercel Blob is not connected. In Vercel open Storage → Create Database → Blob → Private, connect it to this project, enable Production, then redeploy.");
+    }
+    return jsonError(res, 400, message);
+  }
 });
 
 /* Keep the old endpoint name so stale browser code gets a clear message instead of a generic 404. */
 app.post("/api/upload-chunk", requireAuth, (req, res) => {
-  return jsonError(res, 410, "Legacy chunk upload is disabled. Refresh the website to load the signed direct-to-Blob uploader.");
+  return jsonError(res, 410, "This Vercel build uses direct browser-to-Blob multipart uploads. Please refresh the page and try the upload again.");
 });
 
 app.post("/api/register-upload", requireAuth, async (req, res) => {
@@ -755,4 +750,3 @@ if (!process.env.VERCEL) {
 }
 
 module.exports = app;
-  
