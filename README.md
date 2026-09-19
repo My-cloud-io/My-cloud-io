@@ -1,27 +1,42 @@
-My Personal Cloud / Cloud-Zen — Vercel Blob 7.3.0
-This package keeps the existing My Personal Cloud UI and routes. The requested changes are limited to the upload path and file rename controls.
-Large-file upload
-Browser uploads go directly to the connected private Vercel Blob store; the file bytes do not pass through a Vercel Function.
-The upload uses Vercel Blob's presigned browser-upload flow instead of the failing private client-token flow.
-multipart: true is used for large files, so the Vercel Blob client can split large files into parts, retry failed parts and upload parts in parallel.
-Upload progress remains visible in the existing queue UI.
-Failed uploads are retried up to 3 times.
-The application limit remains 1 TB per file.
-Vercel Blob supports files up to 5 TB with its large-file/multipart capabilities; this application intentionally keeps its existing 1 TB per-file limit.
-Rename / Hide
-Rename is a real editable rename dialog, not an Info-style action.
-The dialog opens with the current filename selected so the name can be changed naturally and saved.
-A Hide button sits beside Rename in the quick-action row and closes that action row.
-Rename uses the exact Blob pathname of the selected card, so duplicate visible filenames are handled correctly.
-Starred and Recent references are updated when a file is renamed.
-Delete
-Delete first asks for confirmation.
-It then asks for the configured DELETE_PASSWORD before sending the DELETE request.
-The exact Blob pathname from the selected card is used, so duplicate filenames do not delete the wrong object.
-The server deletes the real private Vercel Blob object. Completed files are not automatically deleted.
-Vercel setup
-Connect a Private Vercel Blob store to this Vercel project.
-Make sure the Blob store is enabled for the Production environment.
-Keep the existing APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET environment variables configured.
-Deploy the project and refresh the deployed site before testing an upload.
-Important The source package has been syntax-checked and the ZIP has been rebuilt here. A real multi-GB upload cannot be performed from this build environment, so live upload success still depends on the connected Vercel Blob store and the user's network/browser.
+My Personal Cloud — Telegram Storage Edition 8.0.0
+This build keeps the existing My Personal Cloud / Cloud-Zen website UI and uses Telegram MTProto user-session storage as the physical storage backend.
+Storage
+Every uploaded file is split in the browser into fixed 4 MiB chunks and sent to the authenticated server. Each chunk is stored as a Telegram document message with a CZ1|CHUNK|... metadata caption. The website reconstructs the logical file from those Telegram messages.
+Supported by the application:
+Images and photos
+Videos, including 4K video files
+Audio and recordings
+Documents
+ZIP/RAR/7z and other general files
+KB / MB / GB sized files
+Up to 1 TB per file in this application build
+Open/preview where the existing UI supports the MIME type
+Download with range support
+Rename by editing Telegram metadata captions
+Delete with the existing delete-password flow; the real Telegram messages are deleted
+No automatic deletion of completed files
+Vercel environment variables
+Set these in the Vercel Project → Settings → Environment Variables:
+APP_PASSWORD=your-existing-login-password
+DELETE_PASSWORD=your-existing-delete-password
+SESSION_SECRET=your-long-random-session-secret
+TELEGRAM_API_ID=your-telegram-api-id
+TELEGRAM_API_HASH=your-telegram-api-hash
+TELEGRAM_SESSION=your-existing-telegram-string-session
+TELEGRAM_STORAGE_CHAT=me
+NODE_ENV=production
+TELEGRAM_SESSION is a secret. Do not put it in public/index.html or commit it to GitHub.
+Telegram storage chat
+The default is me, meaning the authenticated Telegram account's Saved Messages. You can set TELEGRAM_STORAGE_CHAT to the target chat/channel entity you intentionally use for storage.
+Large uploads
+The browser uses 4 MiB requests so the file itself does not have to be sent as one large Vercel request. Telegram MTProto handles the internal Telegram upload protocol for each chunk. The website uploads chunks sequentially to avoid deliberately creating concurrent connections with the same Telegram user session.
+The application limit is 1 TB per file. A 1 TB file is represented by many Telegram chunk messages; upload time depends on the phone/network and Telegram connection speed.
+Session creator
+telegram-session.js is only for creating a StringSession locally. Run it on a trusted computer with:
+TELEGRAM_API_ID=... TELEGRAM_API_HASH=... node telegram-session.js
+Then save the printed session string as the Vercel TELEGRAM_SESSION environment variable.
+Vercel deployment
+The ZIP includes vercel.json and api/index.js. Vercel runs the Express application as a Node function, while public/index.html remains the website UI.
+After adding/updating environment variables, redeploy the project.
+Important Telegram API distinction
+This build uses a Telegram MTProto user session, not the ordinary Telegram Bot API upload method. The Bot API has much smaller direct-upload limits; MTProto is used here because the project needs large-file storage.
