@@ -53,6 +53,16 @@ const MAX_CHUNKS = 100000;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 3;
+const IS_VERCEL = Boolean(process.env.VERCEL);
+const VERCEL_ENV = String(process.env.VERCEL_ENV || "").toLowerCase();
+
+// A Telegram StringSession must never be shared by Vercel Preview and Production.
+// Preview deployments are intentionally blocked from opening the MTProto session.
+function assertTelegramDeploymentAllowed() {
+  if (IS_VERCEL && VERCEL_ENV && VERCEL_ENV !== "production") {
+    throw new Error("Telegram storage is disabled on Vercel Preview deployments. Open the Production Cloud-Zen URL instead.");
+  }
+}
 
 if (!APP_PASSWORD || !DELETE_PASSWORD || !SESSION_SECRET) {
   console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in the deployment environment.");
@@ -94,6 +104,7 @@ async function getTelegramClient() {
   if (telegramInitPromise) return telegramInitPromise;
 
   telegramInitPromise = (async () => {
+    assertTelegramDeploymentAllowed();
     if (!TELEGRAM_API_ID || !TELEGRAM_API_HASH || !TELEGRAM_SESSION) {
       throw new Error("Telegram storage is not configured. Set TELEGRAM_API_ID, TELEGRAM_API_HASH and TELEGRAM_SESSION.");
     }
@@ -421,12 +432,10 @@ async function rebuildIndex(force = false) {
     const client = await getTelegramClient();
     const grouped = new Map();
 
-    // Telegram history is the durable index. Only messages with our CZ1
-    // marker are considered storage records.
-    // Search Telegram server-side for our unique caption marker instead of scanning
-    // the entire Saved Messages history. This is much faster once the account has
-    // a large amount of unrelated history.
-    for await (const message of client.iterMessages(TELEGRAM_STORAGE_CHAT, { search: "CZ1", limit: undefined, waitTime: 0 })) {
+    // Telegram history is the durable index. Scan the complete storage chat so
+    // files created by older Cloud-Zen builds are never hidden by a newer search
+    // optimization. The index is cached for INDEX_TTL_MS after a successful scan.
+    for await (const message of client.iterMessages(TELEGRAM_STORAGE_CHAT, { limit: 0, waitTime: 0 })) {
       const parsed = parseChunkCaption(message?.message || message?.text || "");
       if (!parsed || !Number.isInteger(parsed.index) || parsed.index < 0) continue;
       if (!message.id) continue;
@@ -498,10 +507,11 @@ app.get("/api/health", async (req, res) => {
       persistent: true,
       multipart: true,
       chunkSizeBytes: CHUNK_SIZE,
-      telegram: { configured: true, connected: telegramReady }
+      telegram: { configured: true, connected: telegramReady },
+      deployment: IS_VERCEL ? (VERCEL_ENV || "unknown") : "node"
     });
   } catch (error) {
-    res.status(503).json({ success: false, status: "degraded", storage: "Cloud Storage", error: error.message });
+    res.status(503).json({ success: false, status: "degraded", storage: "Cloud Storage", error: error.message, deployment: IS_VERCEL ? (VERCEL_ENV || "unknown") : "node" });
   }
 });
 
@@ -599,7 +609,9 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
         file: tmp,
         caption: captionFor(meta, index, sha256),
         forceDocument: true,
-        workers: Math.max(1, Math.min(Number(process.env.TELEGRAM_WORKERS || 8), 16)),
+        // Keep one Telegram file transfer worker per request. This reduces
+        // simultaneous MTProto traffic while preserving the 4 MiB HTTP chunking.
+        workers: 1,
         progressCallback: () => {}
       });
     } catch (error) {
@@ -617,19 +629,16 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
     // Keep only metadata in memory; the durable copy is Telegram itself.
     try { await fsp.unlink(tmp); } catch (_) {}
 
-    const done = state.size === total;
+    // Do not rely on activeUploads for durable completion: Vercel can route
+    // consecutive chunks to different function instances. Telegram itself is
+    // the source of truth. The next /api/files request rebuilds the index from
+    // Telegram and therefore sees a complete upload regardless of instance.
+    const done = index === total - 1;
     if (done) {
-      fileIndex.set(name, {
-        id,
-        name,
-        size,
-        total,
-        chunks: new Map(state),
-        modified: new Date().toISOString()
-      });
-      indexLoaded = true;
-      indexLoadedAt = Date.now();
       activeUploads.delete(uploadKey);
+      indexLoaded = false;
+      indexLoadedAt = 0;
+      fileIndex = new Map();
     }
 
     return res.json({
