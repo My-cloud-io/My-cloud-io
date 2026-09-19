@@ -45,65 +45,17 @@ const TELEGRAM_API_HASH = String(process.env.TELEGRAM_API_HASH || "").trim();
 const TELEGRAM_SESSION = String(process.env.TELEGRAM_SESSION || "").trim();
 const TELEGRAM_STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || "me").trim();
 
-// Notifications: a free "SMS-like" alert via Telegram (you already have
-// Telegram set up, so this costs nothing and needs no extra signup).
-// Defaults to the same chat as storage ("me" = your own Saved Messages),
-// which is safe — notification texts don't match the CZ1 chunk format so
-// they never interfere with the file index.
-const TELEGRAM_NOTIFY_CHAT = String(process.env.TELEGRAM_NOTIFY_CHAT || TELEGRAM_STORAGE_CHAT || "me").trim();
-const NOTIFY_ON_EVENTS = String(process.env.NOTIFY_ON_EVENTS || "true").trim().toLowerCase() !== "false";
-
-// Optional REAL SMS via Twilio. Only activates if all four are set — real
-// SMS costs money and needs a Twilio account; this is entirely optional.
-const TWILIO_ACCOUNT_SID = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
-const TWILIO_AUTH_TOKEN = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
-const TWILIO_FROM_NUMBER = String(process.env.TWILIO_FROM_NUMBER || "").trim();
-const TWILIO_TO_NUMBER = String(process.env.TWILIO_TO_NUMBER || "").trim();
-const TWILIO_ENABLED = Boolean(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_FROM_NUMBER && TWILIO_TO_NUMBER);
-
-// Fire-and-forget: never blocks or fails the actual upload/download/delete.
-function notify(text) {
-  if (!NOTIFY_ON_EVENTS) return;
-
-  getTelegramClient()
-    .then(client => client.sendMessage(TELEGRAM_NOTIFY_CHAT, { message: text }))
-    .catch(error => console.warn("[Cloud-Zen] Telegram notify failed:", error.message));
-
-  if (TWILIO_ENABLED) {
-    const auth = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
-    fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: new URLSearchParams({ From: TWILIO_FROM_NUMBER, To: TWILIO_TO_NUMBER, Body: text })
-    }).catch(error => console.warn("[Cloud-Zen] Twilio SMS failed:", error.message));
-  }
-}
-
-// IMPORTANT: the browser learns this value from GET /api/config and slices
-// files using the exact number the server reports. Never hardcode a chunk
-// size in the frontend — a mismatch here is what causes "upload fails on
-// every file bigger than a few MB", because every chunk boundary the server
-// validates (index * CHUNK_SIZE) would silently stop lining up with what the
-// browser actually sent.
-const CHUNK_SIZE = Math.max(
-  4 * 1024 * 1024,
-  Math.min(Number(process.env.CHUNK_SIZE || 20 * 1024 * 1024), 256 * 1024 * 1024)
-);
+// Vercel Functions accept requests only up to a few MB. Keep this fixed so an
+// old CHUNK_SIZE environment variable can never make browser requests too large.
+const CHUNK_SIZE = 4 * 1024 * 1024;
 const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 20 * 1024 * 1024 * 1024 * 1024);
-const MAX_CHUNKS = 200000;
+const MAX_CHUNKS = 100000;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 3;
-// How many chunks the browser is told it may send in parallel per file.
-// More parallel chunks = faster large-file uploads, at the cost of more
-// simultaneous Telegram API calls. 3-4 is a safe, fast default.
-const UPLOAD_CONCURRENCY = Math.max(1, Math.min(Number(process.env.UPLOAD_CONCURRENCY || 4), 8));
 
 if (!APP_PASSWORD || !DELETE_PASSWORD || !SESSION_SECRET) {
-  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in Render.");
+  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in the deployment environment.");
 }
 if (!TELEGRAM_API_ID || !TELEGRAM_API_HASH || !TELEGRAM_SESSION) {
   console.warn("[Cloud-Zen] Telegram MTProto credentials are not fully configured.");
@@ -155,6 +107,8 @@ async function getTelegramClient() {
       retryDelay: 1000,
       autoReconnect: true,
       requestRetries: 5,
+      sequentialUpdates: true,
+      maxConcurrentDownloads: 1,
       downloadPool: {
         poolSize: 4,
         workers: 8,
@@ -178,48 +132,15 @@ async function getTelegramClient() {
   } catch (error) {
     telegramReady = false;
     telegramLastError = error?.message || String(error);
-    console.error("[Cloud-Zen] Telegram connection error:", telegramLastError);
+    if (String(telegramLastError).includes("AUTH_KEY_DUPLICATED")) {
+      console.error("[Cloud-Zen] Telegram session was invalidated because the same MTProto session is being used by more than one main connection. Stop other deployments/processes using this session and generate a fresh Telegram session.");
+    } else {
+      console.error("[Cloud-Zen] Telegram connection error:", telegramLastError);
+    }
     throw error;
   } finally {
     telegramInitPromise = null;
   }
-}
-
-function floodWaitSeconds(error) {
-  if (!error) return 0;
-  if (Number.isFinite(error.seconds)) return Number(error.seconds);
-  const match = String(error.message || error.errorMessage || "").match(/FLOOD_WAIT_(\d+)/i);
-  return match ? Number(match[1]) : 0;
-}
-
-// Telegram occasionally asks clients to slow down (FLOOD_WAIT). Rather than
-// failing the whole chunk (and the whole upload) the server waits the exact
-// time Telegram asked for and retries automatically, up to 2 times. Only if
-// Telegram is still unhappy after that do we surface a 429 so the browser
-// can back off and try again later.
-async function sendChunkWithFloodRetry(filePath, caption) {
-  const client = await getTelegramClient();
-  let lastError = null;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      return await client.sendFile(TELEGRAM_STORAGE_CHAT, {
-        file: filePath,
-        caption,
-        forceDocument: true,
-        workers: Math.max(1, Math.min(Number(process.env.TELEGRAM_WORKERS || 8), 16)),
-        progressCallback: () => {}
-      });
-    } catch (error) {
-      lastError = error;
-      const waitSeconds = floodWaitSeconds(error);
-      if (waitSeconds && attempt < 3) {
-        await new Promise(resolve => setTimeout(resolve, (waitSeconds + 1) * 1000));
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw lastError;
 }
 
 /* =========================
@@ -488,11 +409,13 @@ function parseChunkCaption(text) {
 ========================= */
 let fileIndex = new Map();
 let indexLoaded = false;
+let indexLoadedAt = 0;
 let indexPromise = null;
+const INDEX_TTL_MS = 2 * 60 * 1000;
 
 async function rebuildIndex(force = false) {
   if (indexPromise && !force) return indexPromise;
-  if (indexLoaded && !force) return fileIndex;
+  if (indexLoaded && !force && (Date.now() - indexLoadedAt) < INDEX_TTL_MS) return fileIndex;
 
   indexPromise = (async () => {
     const client = await getTelegramClient();
@@ -500,7 +423,10 @@ async function rebuildIndex(force = false) {
 
     // Telegram history is the durable index. Only messages with our CZ1
     // marker are considered storage records.
-    for await (const message of client.iterMessages(TELEGRAM_STORAGE_CHAT, { limit: 0 })) {
+    // Search Telegram server-side for our unique caption marker instead of scanning
+    // the entire Saved Messages history. This is much faster once the account has
+    // a large amount of unrelated history.
+    for await (const message of client.iterMessages(TELEGRAM_STORAGE_CHAT, { search: "CZ1", limit: undefined, waitTime: 0 })) {
       const parsed = parseChunkCaption(message?.message || message?.text || "");
       if (!parsed || !Number.isInteger(parsed.index) || parsed.index < 0) continue;
       if (!message.id) continue;
@@ -538,6 +464,7 @@ async function rebuildIndex(force = false) {
 
     fileIndex = next;
     indexLoaded = true;
+    indexLoadedAt = Date.now();
     return fileIndex;
   })();
 
@@ -570,6 +497,7 @@ app.get("/api/health", async (req, res) => {
       storage: "Cloud Storage",
       persistent: true,
       multipart: true,
+      chunkSizeBytes: CHUNK_SIZE,
       telegram: { configured: true, connected: telegramReady }
     });
   } catch (error) {
@@ -577,30 +505,18 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
-// The browser MUST use this exact chunk size when slicing files for
-// /api/upload-chunk. See the CHUNK_SIZE comment above for why.
-app.get("/api/config", requireAuth, (req, res) => {
-  res.json({
-    chunkSize: CHUNK_SIZE,
-    maxFileSize: MAX_FILE_SIZE,
-    maxChunks: MAX_CHUNKS,
-    uploadConcurrency: UPLOAD_CONCURRENCY
-  });
-});
-
 app.get("/api/storage", requireAuth, async (req, res) => {
   try {
     const index = await rebuildIndex();
     let used = 0;
     for (const file of index.values()) used += Number(file.size || 0);
-    // There is no numeric storage quota to report: files are chunked and
-    // stored without a fixed cap, so the UI shows real usage only.
+    // Telegram's overall cloud storage is not exposed as a numeric quota by
+    // the API, so the UI intentionally reports logical usage, not a fake quota.
     res.json({
       usedBytes: used,
       usedText: formatBytes(used),
-      fileCount: index.size,
       remainingBytes: null,
-      remainingText: "Cloud",
+      remainingText: "Telegram cloud",
       usedPercent: 0,
       limitText: "Cloud",
       provider: { configured: telegramReady, connected: telegramReady, usedText: formatBytes(used), remainingText: "Cloud" }
@@ -679,7 +595,13 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
 
     let message;
     try {
-      message = await sendChunkWithFloodRetry(tmp, captionFor(meta, index, sha256));
+      message = await client.sendFile(TELEGRAM_STORAGE_CHAT, {
+        file: tmp,
+        caption: captionFor(meta, index, sha256),
+        forceDocument: true,
+        workers: Math.max(1, Math.min(Number(process.env.TELEGRAM_WORKERS || 8), 16)),
+        progressCallback: () => {}
+      });
     } catch (error) {
       // If Telegram rate-limits the request, leave no local data behind.
       throw error;
@@ -706,8 +628,8 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
         modified: new Date().toISOString()
       });
       indexLoaded = true;
+      indexLoadedAt = Date.now();
       activeUploads.delete(uploadKey);
-      notify(`📤 Uploaded: ${name} (${formatBytes(size)})`);
     }
 
     return res.json({
@@ -722,13 +644,6 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
   } catch (error) {
     try { await fsp.unlink(tmp); } catch (_) {}
     console.error("UPLOAD CHUNK ERROR:", error);
-    const waitSeconds = floodWaitSeconds(error);
-    if (waitSeconds) {
-      return res.status(429).json({
-        error: `Telegram asked us to slow down. Retrying automatically in ${waitSeconds}s.`,
-        retryAfterSeconds: waitSeconds
-      });
-    }
     return res.status(error?.statusCode || 500).json({ error: error.message || "Upload failed" });
   }
 });
@@ -811,7 +726,11 @@ async function streamFileToResponse(req, res, meta, inline) {
   res.setHeader("Content-Type", mimeFor(meta.name));
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
-  res.setHeader("Cache-Control", "private, no-store");
+  if (mimeFor(meta.name) === "application/pdf" && inline) {
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
+  }
+  res.setHeader("Cache-Control", "private, max-age=3600, stale-while-revalidate=86400");
   res.setHeader("Content-Length", String(end - start + 1));
   if (partial) res.setHeader("Content-Range", `bytes ${start}-${end}/${totalSize}`);
 
@@ -867,7 +786,6 @@ app.get(/^\/api\/download\/(.+)$/, requireAuth, requireDownloadPassword, async (
     const name = decodeURIComponent(req.params[0]);
     const file = await findFile(name);
     if (!file) return res.status(404).send("File not found");
-    notify(`📥 Downloaded: ${name}`);
     await streamFileToResponse(req, res, file, false);
   } catch (error) {
     if (!res.headersSent) res.status(500).send(error.message || "Download failed");
@@ -919,7 +837,8 @@ app.patch("/api/files", requireAuth, async (req, res) => {
     const renamed = { ...file, name: newName, modified: new Date().toISOString() };
     fileIndex.delete(oldName);
     fileIndex.set(newName, renamed);
-    notify(`✏️ Renamed: ${oldName} → ${newName}`);
+    indexLoaded = true;
+    indexLoadedAt = Date.now();
     return res.json({ ok: true, file: publicFile(renamed) });
   } catch (error) {
     console.error("RENAME ERROR:", error);
@@ -1002,7 +921,6 @@ app.get(/^\/s\/([^/]+)\/download$/, async (req, res) => {
     if (!validSharedDownload(token, req)) return res.status(403).send("Download access requires the security password.");
     const file = await findFile(data.n);
     if (!file) return res.status(404).send("File not found");
-    notify(`📥 Shared-link download: ${file.name}`);
     await streamFileToResponse(req, res, file, false);
   } catch (error) {
     if (!res.headersSent) res.status(500).send(error.message || "Download failed"); else res.destroy(error);
@@ -1023,39 +941,13 @@ app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) =>
     if (ids.length) await deleteTelegramMessages(ids);
 
     fileIndex.delete(name);
-    notify(`🗑️ Deleted: ${name}`);
+    indexLoaded = true;
+    indexLoadedAt = Date.now();
     res.json({ ok: true, name, message: "File permanently deleted" });
   } catch (error) {
     console.error("DELETE ERROR:", error);
     res.status(500).json({ error: error.message || "Delete failed" });
   }
-});
-
-/* =========================
-   BULK DELETE
-========================= */
-app.post("/api/files/bulk-delete", requireAuth, requireDeletePassword, async (req, res) => {
-  const names = Array.isArray(req.body?.names) ? req.body.names.map(cleanName) : [];
-  if (!names.length) return res.status(400).json({ error: "No files selected" });
-
-  const deleted = [];
-  const failed = [];
-
-  for (const name of names) {
-    try {
-      const file = await findFile(name);
-      if (!file) { failed.push({ name, error: "File not found" }); continue; }
-      const ids = [...file.chunks.values()].map(c => Number(c.messageId)).filter(Boolean);
-      if (ids.length) await deleteTelegramMessages(ids);
-      fileIndex.delete(name);
-      deleted.push(name);
-    } catch (error) {
-      failed.push({ name, error: error.message || "Delete failed" });
-    }
-  }
-
-  res.json({ ok: failed.length === 0, deleted, failed });
-  if (deleted.length) notify(`🗑️ Deleted ${deleted.length} file(s): ${deleted.slice(0, 5).join(", ")}${deleted.length > 5 ? "…" : ""}`);
 });
 
 /* =========================
@@ -1130,3 +1022,4 @@ app.listen(PORT, HOST, () => {
   console.log(`[Cloud-Zen] Server running on ${HOST}:${PORT}`);
   console.log(`[Cloud-Zen] Chunk size: ${formatBytes(CHUNK_SIZE)}`);
 });
+  
