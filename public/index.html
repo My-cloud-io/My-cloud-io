@@ -2478,7 +2478,7 @@ input[type="password"]::placeholder{
     display:grid;
 
     grid-template-columns:
-        repeat(4, 1fr);
+        1fr 1fr 1fr;
 
     gap:7px;
 
@@ -3091,27 +3091,6 @@ input[type="password"]::placeholder{
     }
 }
 
-
-
-/* =========================================================
-   UI UPGRADE — STORAGE ACCORDION + QUICK ACTION MENU
-   Added only; original styles and elements remain intact.
-========================================================= */
-.storageDetailsCard.storageCompact .storageProviderGrid{display:none;}
-.storageDetailsCard.storageCompact .storageDetailsHead{margin-bottom:0;}
-.storageAccordionButton{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:38px;border:1px solid var(--line);background:rgba(255,255,255,.045);color:#dbe5f2;border-radius:11px;padding:8px 11px;cursor:pointer;font-size:11px;font-weight:850;white-space:nowrap;transition:transform .18s ease,background .18s ease;}
-.storageAccordionButton:hover{background:rgba(255,255,255,.08);transform:translateY(-1px);}
-.storageAccordionButton .accordionChevron{display:inline-block;transition:transform .22s ease;}
-.fileActions{position:relative;}
-.fileActions .fileMoreButton{display:flex;align-items:center;justify-content:center;width:100%;min-height:38px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.045);color:#dbe5f2;border-radius:12px;cursor:pointer;font-size:18px;font-weight:900;line-height:1;letter-spacing:2px;transition:background .18s ease,transform .18s ease;}
-.fileActions .fileMoreButton:hover{background:rgba(255,255,255,.09);transform:translateY(-1px);}
-.fileActions .fileAction{display:none;}
-.fileCard.quickActionsOpen .fileActions .fileAction{display:block;}
-.fileCard.quickActionsOpen .fileActions .fileMoreButton{display:none;}
-.fileCard:not(.quickActionsOpen) .deleteRow{display:none !important;}
-.fileCard.quickActionsOpen .deleteRow{display:flex !important;}
-@media(max-width:760px){.storageProviderGrid{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(220px,82%);overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;padding-bottom:4px;-webkit-overflow-scrolling:touch;}.storageProvider{scroll-snap-align:start;}}
-@media(max-width:470px){.storageAccordionButton{padding:8px 9px;}}
 </style>
 
 
@@ -5090,30 +5069,6 @@ function formatClientBytes(bytes){
 
 
 
-/* =========================================================
-   STORAGE ACCORDION — COLLAPSE LONG PROVIDER LIST
-========================================================= */
-(function initStorageAccordion(){
-    const detailsCard = document.getElementById("storageDetailsCard");
-    const head = detailsCard?.querySelector(".storageDetailsHead");
-    if(!detailsCard || !head) return;
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "storageAccordionButton";
-    button.innerHTML = `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`;
-
-    button.addEventListener("click", () => {
-        const collapsed = detailsCard.classList.toggle("storageCompact");
-        button.innerHTML = collapsed
-            ? `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`
-            : `Hide <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌃</span>`;
-    });
-
-    head.appendChild(button);
-    detailsCard.classList.add("storageCompact");
-})();
-
 storageDetailsRefresh?.addEventListener(
     "click",
     async () => {
@@ -6002,95 +5957,15 @@ function createFileCard(
         "click",
         () =>
             deleteFile(
-                file
+                file.name
             )
     );
 
 
-    const rename =
-        document.createElement(
-            "button"
-        );
-
-    rename.className =
-        "fileAction";
-
-    rename.textContent =
-        "Rename";
-
-    rename.addEventListener(
-        "click",
-        event => {
-            event.stopPropagation();
-            renameFile(file);
-        }
-    );
-
-
-    const hide =
-        document.createElement(
-            "button"
-        );
-
-    hide.className =
-        "fileAction";
-
-    hide.type =
-        "button";
-
-    hide.textContent =
-        "Hide";
-
-    hide.addEventListener(
-        "click",
-        event => {
-            event.stopPropagation();
-            card.classList.remove(
-                "quickActionsOpen"
-            );
-        }
-    );
-
-
-    const more =
-        document.createElement(
-            "button"
-        );
-
-    more.className =
-        "fileMoreButton";
-
-    more.type =
-        "button";
-
-    more.title =
-        "More actions";
-
-    more.setAttribute(
-        "aria-label",
-        "More actions"
-    );
-
-    more.textContent =
-        "•••";
-
-    more.addEventListener(
-        "click",
-        event => {
-            event.stopPropagation();
-            card.classList.toggle(
-                "quickActionsOpen"
-            );
-        }
-    );
-
     actions.append(
         open,
         download,
-        share,
-        rename,
-        hide,
-        more
+        share
     );
 
 
@@ -6128,26 +6003,6 @@ function createFileCard(
         info
     );
 
-
-    let longPressTimer = null;
-
-    const startLongPress = event => {
-        if(event.pointerType === "mouse") return;
-        clearTimeout(longPressTimer);
-        longPressTimer = setTimeout(() => {
-            card.classList.add("quickActionsOpen");
-        }, 520);
-    };
-
-    const cancelLongPress = () => {
-        clearTimeout(longPressTimer);
-        longPressTimer = null;
-    };
-
-    card.addEventListener("pointerdown", startLongPress, {passive:true});
-    card.addEventListener("pointerup", cancelLongPress);
-    card.addEventListener("pointercancel", cancelLongPress);
-    card.addEventListener("pointerleave", cancelLongPress);
 
     return card;
 }
@@ -6727,158 +6582,55 @@ function closeViewer(){
 
 
 /* =========================================================
-   RENAME
-========================================================= */
-
-async function renameFile(
-    file
-){
-
-    const currentName =
-        String(file?.name || "file");
-
-    const newName =
-        window.prompt(
-            "Enter new file name:",
-            currentName
-        );
-
-    if(newName === null){
-        return;
-    }
-
-    const trimmed =
-        String(newName).trim();
-
-    if(!trimmed){
-        alert("File name is required.");
-        return;
-    }
-
-    if(trimmed === currentName){
-        return;
-    }
-
-    try{
-
-        await api(
-            "/api/files",
-            {
-                method:"PATCH",
-                headers:{
-                    "Content-Type":"application/json"
-                },
-                body:JSON.stringify({
-                    name:currentName,
-                    pathname:String(file?.pathname || ""),
-                    newName:trimmed
-                })
-            }
-        );
-
-        if(starred.has(currentName)){
-            starred.delete(currentName);
-            starred.add(trimmed);
-            writeJSON(
-                STAR_KEY,
-                [...starred]
-            );
-        }
-
-        recent =
-            recent.map(
-                item =>
-                    item === currentName
-                        ? trimmed
-                        : item
-            );
-
-        writeJSON(
-            RECENT_KEY,
-            recent
-        );
-
-        showToast(
-            "File renamed successfully"
-        );
-
-        await loadEverything();
-
-    }catch(error){
-        alert(error.message);
-    }
-}
-
-
-/* =========================================================
    DELETE
 ========================================================= */
 
 async function deleteFile(
-    file
+    name
 ){
-
-    const name =
-        typeof file === "string"
-            ? file
-            : String(file?.name || "file");
-
-    const pathname =
-        typeof file === "object" && file
-            ? String(file.pathname || "")
-            : "";
 
     const ok =
         confirm(
             `Delete "${name}" permanently?`
         );
 
+
     if(!ok){
         return;
     }
 
-    // Always ask for the real delete password before making the DELETE call.
-    // The browser masks neither native prompts nor confirms, so this prompt is
-    // intentionally separate from the destructive confirmation above.
-    const deletePassword =
-        window.prompt(
-            "Enter delete password:"
-        );
-
-    if(deletePassword === null){
-        return;
-    }
-
-    if(!String(deletePassword).trim()){
-        alert("Delete password is required.");
-        return;
-    }
 
     try{
 
         await api(
             "/api/files",
             {
+
                 method:"DELETE",
+
                 headers:{
-                    "Content-Type":"application/json"
+                    "Content-Type":
+                        "application/json"
                 },
-                body:JSON.stringify({
-                    name,
-                    pathname,
-                    deletePassword:String(deletePassword)
-                })
+
+                body:
+                    JSON.stringify({
+                        name
+                    })
             }
         );
+
 
         starred.delete(
             name
         );
 
+
         writeJSON(
             STAR_KEY,
             [...starred]
         );
+
 
         recent =
             recent.filter(
@@ -6886,14 +6638,17 @@ async function deleteFile(
                     item !== name
             );
 
+
         writeJSON(
             RECENT_KEY,
             recent
         );
 
+
         showToast(
-            "File permanently deleted"
+            "File deleted"
         );
+
 
         await loadEverything();
 
@@ -7053,32 +6808,169 @@ async function uploadFiles(
 
 
 /* =========================================================
-   TELEGRAM MTProto CHUNK UPLOAD
+   CHUNK UPLOAD
 ========================================================= */
 
-/*
-  File bytes are sent only to the authenticated Telegram-backed server.
-  Each request is a fixed 4 MiB chunk so the Vercel Function request body
-  stays small while the actual completed file lives in Telegram.
-*/
+const CHUNK_SIZE =
+    100 * 1024 * 1024;
 
-const TELEGRAM_UPLOAD_CHUNK_SIZE =
-    4 * 1024 * 1024;
 
-function uploadChunkXHR(
-    url,
-    blob,
-    queue,
-    uploadedBefore,
-    totalSize,
-    retries = 3
+async function uploadFile(
+    file
 ){
 
-    return new Promise((resolve, reject) => {
+    const total =
+        Math.ceil(
+            file.size /
+            CHUNK_SIZE
+        );
 
-        let attempt = 0;
 
-        const run = () => {
+    const id =
+        cryptoRandomId();
+
+
+    const queue =
+        createQueueItem(
+            file
+        );
+
+
+    let uploaded =
+        0;
+
+
+    for(
+        let index = 0;
+        index < total;
+        index++
+    ){
+
+        const start =
+            index *
+            CHUNK_SIZE;
+
+
+        const end =
+            Math.min(
+                file.size,
+                start +
+                CHUNK_SIZE
+            );
+
+
+        const blob =
+            file.slice(
+                start,
+                end
+            );
+
+
+        const params =
+            new URLSearchParams({
+
+                id,
+
+                index:
+                    String(index),
+
+                total:
+                    String(total),
+
+                size:
+                    String(file.size),
+
+                name:
+                    file.name,
+
+                relativePath:
+                    file.name
+            });
+
+
+        await uploadChunkWithProgress(
+            "/api/upload-chunk?" +
+            params.toString(),
+            blob,
+            (loaded) => {
+
+                const currentUploaded =
+                    uploaded + loaded;
+
+                const percent =
+                    file.size
+                        ? currentUploaded /
+                            file.size *
+                            100
+                        : 100;
+
+                updateQueue(
+                    queue,
+                    percent,
+                    false,
+                    currentUploaded,
+                    file.size
+                );
+            }
+        );
+
+
+        uploaded +=
+            blob.size;
+
+
+        updateQueue(
+            queue,
+            file.size
+                ? uploaded /
+                    file.size *
+                    100
+                : 100,
+            false,
+            uploaded,
+            file.size
+        );
+    }
+
+
+    updateQueue(
+        queue,
+        100,
+        true,
+        file.size,
+        file.size
+    );
+
+
+    rememberRecent(
+        file.name
+    );
+
+
+    try{
+        await loadStorage();
+    }catch(error){
+        console.error(
+            "STORAGE REFRESH AFTER UPLOAD ERROR:",
+            error
+        );
+    }
+
+
+    showToast(
+        `${file.name} uploaded`
+    );
+}
+
+
+function uploadChunkWithProgress(
+    url,
+    blob,
+    onProgress
+){
+
+    return new Promise(
+        (resolve, reject) => {
 
             const xhr =
                 new XMLHttpRequest();
@@ -7097,286 +6989,97 @@ function uploadChunkXHR(
                 "application/octet-stream"
             );
 
+            xhr.setRequestHeader(
+                "Content-Length",
+                String(blob.size)
+            );
+
             xhr.upload.onprogress =
                 event => {
 
-                    if(!event.lengthComputable){
-                        return;
+                    if(
+                        event.lengthComputable
+                    ){
+
+                        onProgress(
+                            event.loaded
+                        );
                     }
-
-                    const loaded =
-                        Math.min(
-                            blob.size,
-                            Number(event.loaded || 0)
-                        );
-
-                    const totalLoaded =
-                        uploadedBefore +
-                        loaded;
-
-                    const percentage =
-                        Math.min(
-                            100,
-                            (totalLoaded / totalSize) * 100
-                        );
-
-                    updateQueue(
-                        queue,
-                        percentage,
-                        false,
-                        totalLoaded,
-                        totalSize
-                    );
                 };
 
             xhr.onerror =
-                () => retryOrFail(
-                    new Error("Network error while uploading the chunk.")
-                );
-
-            xhr.ontimeout =
-                () => retryOrFail(
-                    new Error("Upload chunk timed out.")
-                );
-
-            xhr.onload =
                 () => {
-
-                    if(xhr.status >= 200 && xhr.status < 300){
-                        let data = {};
-                        try{
-                            data = JSON.parse(xhr.responseText || "{}");
-                        }catch(_){}
-                        resolve(data);
-                        return;
-                    }
-
-                    let message =
-                        `Upload failed (${xhr.status})`;
-
-                    try{
-                        const data =
-                            JSON.parse(xhr.responseText || "{}");
-                        if(data?.error){
-                            message =
-                                String(data.error);
-                        }
-                    }catch(_){}
-
-                    retryOrFail(
-                        new Error(message)
+                    reject(
+                        new Error(
+                            "Network error during upload"
+                        )
                     );
                 };
 
-            xhr.timeout =
-                120000;
+            xhr.onabort =
+                () => {
+                    reject(
+                        new Error(
+                            "Upload cancelled"
+                        )
+                    );
+                };
+
+            xhr.onload =
+                async () => {
+
+                    let data = null;
+
+                    try{
+                        data =
+                            JSON.parse(
+                                xhr.responseText ||
+                                "null"
+                            );
+                    }catch(_){ }
+
+                    if(
+                        xhr.status === 401
+                    ){
+
+                        showLogin();
+
+                        reject(
+                            new Error(
+                                "Session expired"
+                            )
+                        );
+
+                        return;
+                    }
+
+                    if(
+                        xhr.status < 200 ||
+                        xhr.status >= 300
+                    ){
+
+                        reject(
+                            new Error(
+                                data?.error ||
+                                "Upload failed"
+                            )
+                        );
+
+                        return;
+                    }
+
+                    onProgress(
+                        blob.size
+                    );
+
+                    resolve(data);
+                };
 
             xhr.send(blob);
-        };
-
-        const retryOrFail =
-            error => {
-
-                if(attempt >= retries){
-                    reject(error);
-                    return;
-                }
-
-                attempt += 1;
-
-                const delay =
-                    Math.min(8000, 1000 * Math.pow(2, attempt - 1));
-
-                setTimeout(
-                    run,
-                    delay
-                );
-            };
-
-        run();
-    });
-}
-
-
-async function uploadFile(
-    file
-){
-
-    if(!file || !file.size){
-        throw new Error(
-            "The selected file is empty."
-        );
-    }
-
-    if(
-        file.size >
-        1024 * 1024 * 1024 * 1024
-    ){
-        throw new Error(
-            "This file is larger than the 1 TB application limit."
-        );
-    }
-
-    const queue =
-        createQueueItem(
-            file
-        );
-
-    const id =
-        cryptoRandomId();
-
-    const total =
-        Math.ceil(
-            file.size /
-            TELEGRAM_UPLOAD_CHUNK_SIZE
-        );
-
-    const relativePath =
-        file.webkitRelativePath ||
-        file.name;
-
-    updateQueue(
-        queue,
-        0,
-        false,
-        0,
-        file.size
+        }
     );
-
-    try{
-
-        let uploadedBytes = 0;
-
-        for(
-            let index = 0;
-            index < total;
-            index += 1
-        ){
-
-            const start =
-                index *
-                TELEGRAM_UPLOAD_CHUNK_SIZE;
-
-            const end =
-                Math.min(
-                    file.size,
-                    start +
-                    TELEGRAM_UPLOAD_CHUNK_SIZE
-                );
-
-            const chunk =
-                file.slice(
-                    start,
-                    end
-                );
-
-            const params =
-                new URLSearchParams({
-                    id,
-                    index:String(index),
-                    total:String(total),
-                    size:String(file.size),
-                    name:String(file.name)
-                });
-
-            const result =
-                await uploadChunkXHR(
-                    `/api/upload-chunk?${params.toString()}`,
-                    chunk,
-                    queue,
-                    uploadedBytes,
-                    file.size
-                );
-
-            uploadedBytes =
-                Math.min(
-                    file.size,
-                    uploadedBytes +
-                    chunk.size
-                );
-
-            updateQueue(
-                queue,
-                (uploadedBytes / file.size) * 100,
-                false,
-                uploadedBytes,
-                file.size
-            );
-
-            if(result?.error){
-                throw new Error(
-                    String(result.error)
-                );
-            }
-        }
-
-        updateQueue(
-            queue,
-            100,
-            true,
-            file.size,
-            file.size
-        );
-
-        rememberRecent(
-            file.name
-        );
-
-        try{
-            await loadEverything();
-        }catch(error){
-            console.error(
-                "POST-UPLOAD REFRESH ERROR:",
-                error
-            );
-        }
-
-        showToast(
-            `${file.name} uploaded to Telegram`
-        );
-
-    }catch(error){
-
-        updateQueue(
-            queue,
-            0,
-            false,
-            0,
-            file.size
-        );
-
-        throw error;
-    }
 }
 
-
-async function uploadFiles(
-    files
-){
-
-    /* Keep Telegram session access sequential. This is deliberate: the
-       storage backend uses one Telegram MTProto user session. */
-    const list =
-        Array.from(files || []);
-
-    for(
-        const file of list
-    ){
-
-        try{
-            await uploadFile(
-                file
-            );
-        }catch(error){
-            console.error(
-                error
-            );
-            alert(
-                `${file.name}: ${error.message}`
-            );
-        }
-    }
-}
 
 
 /* =========================================================
@@ -8086,7 +7789,5 @@ window.addEventListener(
 
 </body>
     </html>
-
-
-
     
+
