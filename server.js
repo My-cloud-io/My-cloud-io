@@ -45,15 +45,25 @@ const TELEGRAM_API_HASH = String(process.env.TELEGRAM_API_HASH || "").trim();
 const TELEGRAM_SESSION = String(process.env.TELEGRAM_SESSION || "").trim();
 const TELEGRAM_STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || "me").trim();
 
+// IMPORTANT: the browser learns this value from GET /api/config and slices
+// files using the exact number the server reports. Never hardcode a chunk
+// size in the frontend — a mismatch here is what causes "upload fails on
+// every file bigger than a few MB", because every chunk boundary the server
+// validates (index * CHUNK_SIZE) would silently stop lining up with what the
+// browser actually sent.
 const CHUNK_SIZE = Math.max(
   4 * 1024 * 1024,
-  Math.min(Number(process.env.CHUNK_SIZE || 64 * 1024 * 1024), 512 * 1024 * 1024)
+  Math.min(Number(process.env.CHUNK_SIZE || 20 * 1024 * 1024), 256 * 1024 * 1024)
 );
 const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 20 * 1024 * 1024 * 1024 * 1024);
-const MAX_CHUNKS = 100000;
+const MAX_CHUNKS = 200000;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 3;
+// How many chunks the browser is told it may send in parallel per file.
+// More parallel chunks = faster large-file uploads, at the cost of more
+// simultaneous Telegram API calls. 3-4 is a safe, fast default.
+const UPLOAD_CONCURRENCY = Math.max(1, Math.min(Number(process.env.UPLOAD_CONCURRENCY || 4), 8));
 
 if (!APP_PASSWORD || !DELETE_PASSWORD || !SESSION_SECRET) {
   console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in Render.");
@@ -136,6 +146,43 @@ async function getTelegramClient() {
   } finally {
     telegramInitPromise = null;
   }
+}
+
+function floodWaitSeconds(error) {
+  if (!error) return 0;
+  if (Number.isFinite(error.seconds)) return Number(error.seconds);
+  const match = String(error.message || error.errorMessage || "").match(/FLOOD_WAIT_(\d+)/i);
+  return match ? Number(match[1]) : 0;
+}
+
+// Telegram occasionally asks clients to slow down (FLOOD_WAIT). Rather than
+// failing the whole chunk (and the whole upload) the server waits the exact
+// time Telegram asked for and retries automatically, up to 2 times. Only if
+// Telegram is still unhappy after that do we surface a 429 so the browser
+// can back off and try again later.
+async function sendChunkWithFloodRetry(filePath, caption) {
+  const client = await getTelegramClient();
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await client.sendFile(TELEGRAM_STORAGE_CHAT, {
+        file: filePath,
+        caption,
+        forceDocument: true,
+        workers: Math.max(1, Math.min(Number(process.env.TELEGRAM_WORKERS || 8), 16)),
+        progressCallback: () => {}
+      });
+    } catch (error) {
+      lastError = error;
+      const waitSeconds = floodWaitSeconds(error);
+      if (waitSeconds && attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, (waitSeconds + 1) * 1000));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
 }
 
 /* =========================
@@ -493,18 +540,30 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
+// The browser MUST use this exact chunk size when slicing files for
+// /api/upload-chunk. See the CHUNK_SIZE comment above for why.
+app.get("/api/config", requireAuth, (req, res) => {
+  res.json({
+    chunkSize: CHUNK_SIZE,
+    maxFileSize: MAX_FILE_SIZE,
+    maxChunks: MAX_CHUNKS,
+    uploadConcurrency: UPLOAD_CONCURRENCY
+  });
+});
+
 app.get("/api/storage", requireAuth, async (req, res) => {
   try {
     const index = await rebuildIndex();
     let used = 0;
     for (const file of index.values()) used += Number(file.size || 0);
-    // Telegram's overall cloud storage is not exposed as a numeric quota by
-    // the API, so the UI intentionally reports logical usage, not a fake quota.
+    // There is no numeric storage quota to report: files are chunked and
+    // stored without a fixed cap, so the UI shows real usage only.
     res.json({
       usedBytes: used,
       usedText: formatBytes(used),
+      fileCount: index.size,
       remainingBytes: null,
-      remainingText: "Telegram cloud",
+      remainingText: "Cloud",
       usedPercent: 0,
       limitText: "Cloud",
       provider: { configured: telegramReady, connected: telegramReady, usedText: formatBytes(used), remainingText: "Cloud" }
@@ -583,13 +642,7 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
 
     let message;
     try {
-      message = await client.sendFile(TELEGRAM_STORAGE_CHAT, {
-        file: tmp,
-        caption: captionFor(meta, index, sha256),
-        forceDocument: true,
-        workers: Math.max(1, Math.min(Number(process.env.TELEGRAM_WORKERS || 8), 16)),
-        progressCallback: () => {}
-      });
+      message = await sendChunkWithFloodRetry(tmp, captionFor(meta, index, sha256));
     } catch (error) {
       // If Telegram rate-limits the request, leave no local data behind.
       throw error;
@@ -631,6 +684,13 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
   } catch (error) {
     try { await fsp.unlink(tmp); } catch (_) {}
     console.error("UPLOAD CHUNK ERROR:", error);
+    const waitSeconds = floodWaitSeconds(error);
+    if (waitSeconds) {
+      return res.status(429).json({
+        error: `Telegram asked us to slow down. Retrying automatically in ${waitSeconds}s.`,
+        retryAfterSeconds: waitSeconds
+      });
+    }
     return res.status(error?.statusCode || 500).json({ error: error.message || "Upload failed" });
   }
 });
@@ -927,6 +987,32 @@ app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) =>
     console.error("DELETE ERROR:", error);
     res.status(500).json({ error: error.message || "Delete failed" });
   }
+});
+
+/* =========================
+   BULK DELETE
+========================= */
+app.post("/api/files/bulk-delete", requireAuth, requireDeletePassword, async (req, res) => {
+  const names = Array.isArray(req.body?.names) ? req.body.names.map(cleanName) : [];
+  if (!names.length) return res.status(400).json({ error: "No files selected" });
+
+  const deleted = [];
+  const failed = [];
+
+  for (const name of names) {
+    try {
+      const file = await findFile(name);
+      if (!file) { failed.push({ name, error: "File not found" }); continue; }
+      const ids = [...file.chunks.values()].map(c => Number(c.messageId)).filter(Boolean);
+      if (ids.length) await deleteTelegramMessages(ids);
+      fileIndex.delete(name);
+      deleted.push(name);
+    } catch (error) {
+      failed.push({ name, error: error.message || "Delete failed" });
+    }
+  }
+
+  res.json({ ok: failed.length === 0, deleted, failed });
 });
 
 /* =========================
