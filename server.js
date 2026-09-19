@@ -45,6 +45,43 @@ const TELEGRAM_API_HASH = String(process.env.TELEGRAM_API_HASH || "").trim();
 const TELEGRAM_SESSION = String(process.env.TELEGRAM_SESSION || "").trim();
 const TELEGRAM_STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || "me").trim();
 
+// Notifications: a free "SMS-like" alert via Telegram (you already have
+// Telegram set up, so this costs nothing and needs no extra signup).
+// Defaults to the same chat as storage ("me" = your own Saved Messages),
+// which is safe — notification texts don't match the CZ1 chunk format so
+// they never interfere with the file index.
+const TELEGRAM_NOTIFY_CHAT = String(process.env.TELEGRAM_NOTIFY_CHAT || TELEGRAM_STORAGE_CHAT || "me").trim();
+const NOTIFY_ON_EVENTS = String(process.env.NOTIFY_ON_EVENTS || "true").trim().toLowerCase() !== "false";
+
+// Optional REAL SMS via Twilio. Only activates if all four are set — real
+// SMS costs money and needs a Twilio account; this is entirely optional.
+const TWILIO_ACCOUNT_SID = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
+const TWILIO_AUTH_TOKEN = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
+const TWILIO_FROM_NUMBER = String(process.env.TWILIO_FROM_NUMBER || "").trim();
+const TWILIO_TO_NUMBER = String(process.env.TWILIO_TO_NUMBER || "").trim();
+const TWILIO_ENABLED = Boolean(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_FROM_NUMBER && TWILIO_TO_NUMBER);
+
+// Fire-and-forget: never blocks or fails the actual upload/download/delete.
+function notify(text) {
+  if (!NOTIFY_ON_EVENTS) return;
+
+  getTelegramClient()
+    .then(client => client.sendMessage(TELEGRAM_NOTIFY_CHAT, { message: text }))
+    .catch(error => console.warn("[Cloud-Zen] Telegram notify failed:", error.message));
+
+  if (TWILIO_ENABLED) {
+    const auth = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
+    fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({ From: TWILIO_FROM_NUMBER, To: TWILIO_TO_NUMBER, Body: text })
+    }).catch(error => console.warn("[Cloud-Zen] Twilio SMS failed:", error.message));
+  }
+}
+
 // IMPORTANT: the browser learns this value from GET /api/config and slices
 // files using the exact number the server reports. Never hardcode a chunk
 // size in the frontend — a mismatch here is what causes "upload fails on
@@ -670,6 +707,7 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
       });
       indexLoaded = true;
       activeUploads.delete(uploadKey);
+      notify(`📤 Uploaded: ${name} (${formatBytes(size)})`);
     }
 
     return res.json({
@@ -829,6 +867,7 @@ app.get(/^\/api\/download\/(.+)$/, requireAuth, requireDownloadPassword, async (
     const name = decodeURIComponent(req.params[0]);
     const file = await findFile(name);
     if (!file) return res.status(404).send("File not found");
+    notify(`📥 Downloaded: ${name}`);
     await streamFileToResponse(req, res, file, false);
   } catch (error) {
     if (!res.headersSent) res.status(500).send(error.message || "Download failed");
@@ -880,6 +919,7 @@ app.patch("/api/files", requireAuth, async (req, res) => {
     const renamed = { ...file, name: newName, modified: new Date().toISOString() };
     fileIndex.delete(oldName);
     fileIndex.set(newName, renamed);
+    notify(`✏️ Renamed: ${oldName} → ${newName}`);
     return res.json({ ok: true, file: publicFile(renamed) });
   } catch (error) {
     console.error("RENAME ERROR:", error);
@@ -962,6 +1002,7 @@ app.get(/^\/s\/([^/]+)\/download$/, async (req, res) => {
     if (!validSharedDownload(token, req)) return res.status(403).send("Download access requires the security password.");
     const file = await findFile(data.n);
     if (!file) return res.status(404).send("File not found");
+    notify(`📥 Shared-link download: ${file.name}`);
     await streamFileToResponse(req, res, file, false);
   } catch (error) {
     if (!res.headersSent) res.status(500).send(error.message || "Download failed"); else res.destroy(error);
@@ -982,6 +1023,7 @@ app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) =>
     if (ids.length) await deleteTelegramMessages(ids);
 
     fileIndex.delete(name);
+    notify(`🗑️ Deleted: ${name}`);
     res.json({ ok: true, name, message: "File permanently deleted" });
   } catch (error) {
     console.error("DELETE ERROR:", error);
@@ -1013,6 +1055,7 @@ app.post("/api/files/bulk-delete", requireAuth, requireDeletePassword, async (re
   }
 
   res.json({ ok: failed.length === 0, deleted, failed });
+  if (deleted.length) notify(`🗑️ Deleted ${deleted.length} file(s): ${deleted.slice(0, 5).join(", ")}${deleted.length > 5 ? "…" : ""}`);
 });
 
 /* =========================
