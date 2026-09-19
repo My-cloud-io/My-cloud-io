@@ -1,10 +1,21 @@
-My Personal Cloud / Cloud-Zen — Vercel Final 7.2.0
-This upgrade keeps the original index.html UI and existing file-management API contract. Only the upload and delete reliability paths were changed.
-Project files public/index.html — original mobile-first UI, tabs, search, sort, viewer, QR, upload queue, drag/drop, file list and existing controls. server.js — Express backend with Vercel Blob Private Storage. package.json telegram-session.js — retained for compatibility with the original project layout.
-Upload Uploads use a short-lived, pathname-scoped Vercel Blob signed PUT URL. The browser sends the file bytes directly to Blob, so large files do not pass through the Vercel Function's 4.5 MB request-body limit. The signed token is scoped to PUT, the exact pathname, wildcard content type, and the application maximum size. The browser upload uses retry handling and the queue can upload up to three selected files concurrently.
-Maximum file size defaults to 1 TB and can be changed with MAX_FILE_SIZE. This supports large videos, images, audio and documents as long as the connected Vercel Blob store/account and network support the transfer.
-Verification After a direct upload completes, the server verifies the exact Blob pathname with head() and retries briefly before reporting a verification failure.
-Delete Delete remains manual only. The website asks for the DELETE_PASSWORD before sending the real DELETE request. The server validates the password and deletes the exact Blob pathname when supplied, so the real stored object is removed.
-Storage behavior Completed files are never automatically deleted by the application. They remain until the explicit Delete action succeeds.
-Vercel setup Connect a PRIVATE Vercel Blob store to the same Vercel project and enable Production. Vercel can authenticate Blob operations using OIDC, or the project can use BLOB_READ_WRITE_TOKEN.
-Important The code cannot guarantee a live deployment if the Vercel Blob store is not connected, the deployment is stale, the DELETE_PASSWORD is missing/wrong, or Vercel rejects the request at the platform/storage layer. Deploy this exact ZIP and redeploy the Production deployment.
+My Personal Cloud / Cloud-Zen — Vercel Blob 7.3.0
+This package keeps the original My Personal Cloud UI and routes, while replacing the fragile single-request browser upload path with the official @vercel/blob/client multipart uploader.
+Large-file upload
+Browser uploads go directly to Vercel Blob; file bytes do not pass through a Vercel Function.
+multipart: true is enabled for large files.
+Vercel Blob splits large files into parts, uploads parts in parallel, retries failed parts, and completes the multipart upload.
+The application limit remains 1 TB per file.
+Vercel Blob documents individual files up to 5 TB and recommends multipart uploads above 100 MB.
+Upload progress is preserved in the existing queue UI.
+Delete
+Delete first asks for confirmation.
+It then explicitly asks for the configured DELETE_PASSWORD before sending the DELETE request.
+The exact Blob pathname from the selected card is used, so duplicate filenames do not delete the wrong object.
+The server deletes the real private Vercel Blob object. There is no automatic deletion of completed files.
+Vercel setup
+Connect a Private Vercel Blob store to this Vercel project.
+Make sure the Blob store is enabled for the Production environment.
+Set the existing app secrets (APP_PASSWORD, DELETE_PASSWORD, SESSION_SECRET) as required by your deployment.
+Deploy the ZIP/project and open the deployed site in a fresh browser tab. If an older page is still open, refresh it so the new multipart uploader is loaded.
+Important
+Live success still depends on the Vercel project being connected to the private Blob store and on the browser/network completing the multipart transfer. The source package has been syntax-checked and the ZIP has been integrity-checked here, but a real 8–10 GB upload cannot be performed from this build environment.
