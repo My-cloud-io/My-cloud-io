@@ -5986,6 +5986,27 @@ function createFileCard(
     );
 
 
+    const del =
+        document.createElement(
+            "button"
+        );
+
+    del.className =
+        "fileAction delete";
+
+    del.textContent =
+        "Delete";
+
+
+    del.addEventListener(
+        "click",
+        () =>
+            deleteFile(
+                file
+            )
+    );
+
+
     const rename =
         document.createElement(
             "button"
@@ -6006,24 +6027,28 @@ function createFileCard(
     );
 
 
-    const del =
+    const hide =
         document.createElement(
             "button"
         );
 
-    del.className =
-        "fileAction delete";
+    hide.className =
+        "fileAction";
 
-    del.textContent =
-        "Delete";
+    hide.type =
+        "button";
 
+    hide.textContent =
+        "Hide";
 
-    del.addEventListener(
+    hide.addEventListener(
         "click",
-        () =>
-            deleteFile(
-                file
-            )
+        event => {
+            event.stopPropagation();
+            card.classList.remove(
+                "quickActionsOpen"
+            );
+        }
     );
 
 
@@ -6064,6 +6089,7 @@ function createFileCard(
         download,
         share,
         rename,
+        hide,
         more
     );
 
@@ -6701,7 +6727,7 @@ function closeViewer(){
 
 
 /* =========================================================
-   RENAME — MANUAL ONLY
+   RENAME
 ========================================================= */
 
 async function renameFile(
@@ -6750,10 +6776,27 @@ async function renameFile(
             }
         );
 
-        recent = recent.map(
-            item => item === currentName ? trimmed : item
+        if(starred.has(currentName)){
+            starred.delete(currentName);
+            starred.add(trimmed);
+            writeJSON(
+                STAR_KEY,
+                [...starred]
+            );
+        }
+
+        recent =
+            recent.map(
+                item =>
+                    item === currentName
+                        ? trimmed
+                        : item
+            );
+
+        writeJSON(
+            RECENT_KEY,
+            recent
         );
-        writeJSON(RECENT_KEY, recent);
 
         showToast(
             "File renamed successfully"
@@ -6762,10 +6805,7 @@ async function renameFile(
         await loadEverything();
 
     }catch(error){
-
-        alert(
-            error.message
-        );
+        alert(error.message);
     }
 }
 
@@ -7013,34 +7053,150 @@ async function uploadFiles(
 
 
 /* =========================================================
-   REAL VERCEL BLOB UPLOAD — OFFICIAL MULTIPART CLIENT
+   TELEGRAM MTProto CHUNK UPLOAD
 ========================================================= */
 
 /*
-  Large files never pass through the Vercel Function. The official
-  @vercel/blob/client uploader creates a private client token through
-  /api/blob-upload, splits large files into Blob multipart parts, uploads
-  parts in parallel, retries failed parts, and completes the Blob upload.
-  This is the supported Vercel path for large media.
+  File bytes are sent only to the authenticated Telegram-backed server.
+  Each request is a fixed 4 MiB chunk so the Vercel Function request body
+  stays small while the actual completed file lives in Telegram.
 */
 
-let vercelBlobUploadPromise = null;
+const TELEGRAM_UPLOAD_CHUNK_SIZE =
+    4 * 1024 * 1024;
 
-async function getVercelBlobUpload(){
+function uploadChunkXHR(
+    url,
+    blob,
+    queue,
+    uploadedBefore,
+    totalSize,
+    retries = 3
+){
 
-    if(!vercelBlobUploadPromise){
-        vercelBlobUploadPromise =
-            import("https://esm.sh/@vercel/blob@2.8.0/client?bundle")
-                .then(module => {
-                    if(typeof module.upload !== "function"){
-                        throw new Error("Vercel Blob client uploader is unavailable.");
+    return new Promise((resolve, reject) => {
+
+        let attempt = 0;
+
+        const run = () => {
+
+            const xhr =
+                new XMLHttpRequest();
+
+            xhr.open(
+                "POST",
+                url,
+                true
+            );
+
+            xhr.withCredentials =
+                true;
+
+            xhr.setRequestHeader(
+                "Content-Type",
+                "application/octet-stream"
+            );
+
+            xhr.upload.onprogress =
+                event => {
+
+                    if(!event.lengthComputable){
+                        return;
                     }
-                    return module.upload;
-                });
-    }
 
-    return await vercelBlobUploadPromise;
+                    const loaded =
+                        Math.min(
+                            blob.size,
+                            Number(event.loaded || 0)
+                        );
+
+                    const totalLoaded =
+                        uploadedBefore +
+                        loaded;
+
+                    const percentage =
+                        Math.min(
+                            100,
+                            (totalLoaded / totalSize) * 100
+                        );
+
+                    updateQueue(
+                        queue,
+                        percentage,
+                        false,
+                        totalLoaded,
+                        totalSize
+                    );
+                };
+
+            xhr.onerror =
+                () => retryOrFail(
+                    new Error("Network error while uploading the chunk.")
+                );
+
+            xhr.ontimeout =
+                () => retryOrFail(
+                    new Error("Upload chunk timed out.")
+                );
+
+            xhr.onload =
+                () => {
+
+                    if(xhr.status >= 200 && xhr.status < 300){
+                        let data = {};
+                        try{
+                            data = JSON.parse(xhr.responseText || "{}");
+                        }catch(_){}
+                        resolve(data);
+                        return;
+                    }
+
+                    let message =
+                        `Upload failed (${xhr.status})`;
+
+                    try{
+                        const data =
+                            JSON.parse(xhr.responseText || "{}");
+                        if(data?.error){
+                            message =
+                                String(data.error);
+                        }
+                    }catch(_){}
+
+                    retryOrFail(
+                        new Error(message)
+                    );
+                };
+
+            xhr.timeout =
+                120000;
+
+            xhr.send(blob);
+        };
+
+        const retryOrFail =
+            error => {
+
+                if(attempt >= retries){
+                    reject(error);
+                    return;
+                }
+
+                attempt += 1;
+
+                const delay =
+                    Math.min(8000, 1000 * Math.pow(2, attempt - 1));
+
+                setTimeout(
+                    run,
+                    delay
+                );
+            };
+
+        run();
+    });
 }
+
 
 async function uploadFile(
     file
@@ -7069,47 +7225,15 @@ async function uploadFile(
     const id =
         cryptoRandomId();
 
+    const total =
+        Math.ceil(
+            file.size /
+            TELEGRAM_UPLOAD_CHUNK_SIZE
+        );
+
     const relativePath =
         file.webkitRelativePath ||
         file.name;
-
-    const folder =
-        relativePath.includes("/")
-            ? relativePath
-                .split("/")
-                .slice(0,-1)
-                .join("/")
-            : "";
-
-    const safeFolder =
-        folder
-            .split("/")
-            .filter(Boolean)
-            .filter(
-                part =>
-                    part !== "." &&
-                    part !== ".."
-            )
-            .map(
-                part =>
-                    part
-                        .replace(/[\u0000]/g, "")
-                        .trim()
-                        .slice(0,180)
-            )
-            .filter(Boolean)
-            .join("/");
-
-    const pathname =
-        `my-personal-cloud/files/${id}/` +
-        (
-            safeFolder
-                ? `${safeFolder}/`
-                : ""
-        ) +
-        encodeURIComponent(
-            file.name
-        );
 
     updateQueue(
         queue,
@@ -7121,61 +7245,70 @@ async function uploadFile(
 
     try{
 
-        const upload =
-            await getVercelBlobUpload();
+        let uploadedBytes = 0;
 
-        const blob =
-            await upload(
-                pathname,
-                file,
-                {
-                    access:"private",
-                    handleUploadUrl:"/api/blob-upload",
-                    multipart:true,
-                    clientPayload:JSON.stringify({
-                        id,
-                        size:file.size,
-                        name:file.name,
-                        relativePath
-                    }),
-                    onUploadProgress(progress){
-                        const loaded =
-                            Number(progress?.loaded || 0);
-                        const total =
-                            Number(progress?.total || file.size);
-                        const percentage =
-                            Math.max(0, Math.min(100, Number(progress?.percentage || (loaded / total * 100))));
+        for(
+            let index = 0;
+            index < total;
+            index += 1
+        ){
 
-                        updateQueue(
-                            queue,
-                            percentage,
-                            false,
-                            loaded,
-                            total
-                        );
-                    }
-                }
+            const start =
+                index *
+                TELEGRAM_UPLOAD_CHUNK_SIZE;
+
+            const end =
+                Math.min(
+                    file.size,
+                    start +
+                    TELEGRAM_UPLOAD_CHUNK_SIZE
+                );
+
+            const chunk =
+                file.slice(
+                    start,
+                    end
+                );
+
+            const params =
+                new URLSearchParams({
+                    id,
+                    index:String(index),
+                    total:String(total),
+                    size:String(file.size),
+                    name:String(file.name)
+                });
+
+            const result =
+                await uploadChunkXHR(
+                    `/api/upload-chunk?${params.toString()}`,
+                    chunk,
+                    queue,
+                    uploadedBytes,
+                    file.size
+                );
+
+            uploadedBytes =
+                Math.min(
+                    file.size,
+                    uploadedBytes +
+                    chunk.size
+                );
+
+            updateQueue(
+                queue,
+                (uploadedBytes / file.size) * 100,
+                false,
+                uploadedBytes,
+                file.size
             );
 
-        if(!blob?.pathname){
-            throw new Error("Vercel Blob did not return a completed upload.");
-        }
-
-        // Verify the completed private Blob before showing success.
-        await api(
-            "/api/register-upload",
-            {
-                method:"POST",
-                headers:{
-                    "Content-Type":"application/json"
-                },
-                body:JSON.stringify({
-                    pathname:blob.pathname,
-                    size:file.size,
-                    name:file.name
-                })
+            if(result?.error){
+                throw new Error(
+                    String(result.error)
+                );
             }
-        );
+        }
 
         updateQueue(
             queue,
@@ -7199,7 +7332,7 @@ async function uploadFile(
         }
 
         showToast(
-            `${file.name} uploaded`
+            `${file.name} uploaded to Telegram`
         );
 
     }catch(error){
@@ -7221,44 +7354,28 @@ async function uploadFiles(
     files
 ){
 
+    /* Keep Telegram session access sequential. This is deliberate: the
+       storage backend uses one Telegram MTProto user session. */
     const list =
         Array.from(files || []);
 
-    // Keep a small amount of concurrency so several ordinary files can move
-    // together without creating excessive multipart requests on a phone.
-    const concurrency =
-        Math.min(2, Math.max(1, list.length));
+    for(
+        const file of list
+    ){
 
-    let cursor = 0;
-
-    async function worker(){
-        while(true){
-            const index = cursor++;
-            if(index >= list.length) return;
-
-            const file = list[index];
-
-            try{
-                await uploadFile(
-                    file
-                );
-            }catch(error){
-                console.error(
-                    error
-                );
-                alert(
-                    `${file.name}: ${error.message}`
-                );
-            }
+        try{
+            await uploadFile(
+                file
+            );
+        }catch(error){
+            console.error(
+                error
+            );
+            alert(
+                `${file.name}: ${error.message}`
+            );
         }
     }
-
-    await Promise.all(
-        Array.from(
-            {length:concurrency},
-            () => worker()
-        )
-    );
 }
 
 
