@@ -2478,7 +2478,7 @@ input[type="password"]::placeholder{
     display:grid;
 
     grid-template-columns:
-        repeat(5, 1fr);
+        repeat(4, 1fr);
 
     gap:7px;
 
@@ -3092,71 +3092,6 @@ input[type="password"]::placeholder{
 }
 
 
-
-.renameOverlay{
-    position:fixed;
-    inset:0;
-    z-index:100000;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    padding:18px;
-    background:rgba(0,0,0,.68);
-    backdrop-filter:blur(10px);
-}
-.renameDialog{
-    width:min(440px,100%);
-    padding:20px;
-    border:1px solid rgba(255,255,255,.12);
-    border-radius:22px;
-    background:#111722;
-    box-shadow:0 24px 80px rgba(0,0,0,.45);
-}
-.renameDialogTitle{
-    margin:0 0 7px;
-    color:#fff;
-    font-size:19px;
-    font-weight:850;
-}
-.renameDialogText{
-    margin:0 0 14px;
-    color:#8fa1b6;
-    font-size:12px;
-    word-break:break-word;
-}
-.renameDialogInput{
-    width:100%;
-    box-sizing:border-box;
-    padding:12px 13px;
-    border:1px solid rgba(255,255,255,.12);
-    border-radius:12px;
-    outline:none;
-    background:rgba(255,255,255,.055);
-    color:#fff;
-    font:inherit;
-}
-.renameDialogInput:focus{
-    border-color:rgba(145,185,255,.65);
-}
-.renameDialogActions{
-    display:flex;
-    gap:8px;
-    justify-content:flex-end;
-    margin-top:14px;
-}
-.renameDialogActions button{
-    min-width:90px;
-    padding:10px 13px;
-    border:1px solid rgba(255,255,255,.11);
-    border-radius:11px;
-    background:rgba(255,255,255,.055);
-    color:#dbe5f2;
-    cursor:pointer;
-    font-weight:800;
-}
-.renameDialogActions .renameSave{
-    background:rgba(150,180,255,.16);
-}
 
 /* =========================================================
    UI UPGRADE — STORAGE ACCORDION + QUICK ACTION MENU
@@ -6071,34 +6006,6 @@ function createFileCard(
     );
 
 
-    const hide =
-        document.createElement(
-            "button"
-        );
-
-    hide.className =
-        "fileAction";
-
-    hide.type =
-        "button";
-
-    hide.textContent =
-        "Hide";
-
-    hide.title =
-        "Hide actions";
-
-    hide.addEventListener(
-        "click",
-        event => {
-            event.stopPropagation();
-            card.classList.remove(
-                "quickActionsOpen"
-            );
-        }
-    );
-
-
     const del =
         document.createElement(
             "button"
@@ -6157,7 +6064,6 @@ function createFileCard(
         download,
         share,
         rename,
-        hide,
         more
     );
 
@@ -6805,192 +6711,63 @@ async function renameFile(
     const currentName =
         String(file?.name || "file");
 
-    const overlay =
-        document.createElement("div");
+    const newName =
+        window.prompt(
+            "Enter new file name:",
+            currentName
+        );
 
-    overlay.className =
-        "renameOverlay";
+    if(newName === null){
+        return;
+    }
 
-    const dialog =
-        document.createElement("div");
+    const trimmed =
+        String(newName).trim();
 
-    dialog.className =
-        "renameDialog";
+    if(!trimmed){
+        alert("File name is required.");
+        return;
+    }
 
-    const title =
-        document.createElement("h3");
+    if(trimmed === currentName){
+        return;
+    }
 
-    title.className =
-        "renameDialogTitle";
+    try{
 
-    title.textContent =
-        "Rename file";
-
-    const text =
-        document.createElement("p");
-
-    text.className =
-        "renameDialogText";
-
-    text.textContent =
-        "Change the name below and save it.";
-
-    const input =
-        document.createElement("input");
-
-    input.className =
-        "renameDialogInput";
-
-    input.type =
-        "text";
-
-    input.value =
-        currentName;
-
-    input.autocomplete =
-        "off";
-
-    const actions =
-        document.createElement("div");
-
-    actions.className =
-        "renameDialogActions";
-
-    const cancel =
-        document.createElement("button");
-
-    cancel.type =
-        "button";
-
-    cancel.textContent =
-        "Cancel";
-
-    const save =
-        document.createElement("button");
-
-    save.type =
-        "button";
-
-    save.className =
-        "renameSave";
-
-    save.textContent =
-        "Save Rename";
-
-    actions.append(
-        cancel,
-        save
-    );
-
-    dialog.append(
-        title,
-        text,
-        input,
-        actions
-    );
-
-    overlay.appendChild(
-        dialog
-    );
-
-    document.body.appendChild(
-        overlay
-    );
-
-    const close = () => {
-        overlay.remove();
-    };
-
-    cancel.addEventListener(
-        "click",
-        close
-    );
-
-    overlay.addEventListener(
-        "click",
-        event => {
-            if(event.target === overlay) close();
-        }
-    );
-
-    input.addEventListener(
-        "keydown",
-        event => {
-            if(event.key === "Escape") close();
-            if(event.key === "Enter") save.click();
-        }
-    );
-
-    save.addEventListener(
-        "click",
-        async () => {
-            const trimmed =
-                String(input.value || "").trim();
-
-            if(!trimmed){
-                input.focus();
-                return;
+        await api(
+            "/api/files",
+            {
+                method:"PATCH",
+                headers:{
+                    "Content-Type":"application/json"
+                },
+                body:JSON.stringify({
+                    name:currentName,
+                    pathname:String(file?.pathname || ""),
+                    newName:trimmed
+                })
             }
+        );
 
-            if(trimmed === currentName){
-                close();
-                return;
-            }
+        recent = recent.map(
+            item => item === currentName ? trimmed : item
+        );
+        writeJSON(RECENT_KEY, recent);
 
-            save.disabled = true;
-            save.textContent = "Saving…";
+        showToast(
+            "File renamed successfully"
+        );
 
-            try{
-                await api(
-                    "/api/files",
-                    {
-                        method:"PATCH",
-                        headers:{
-                            "Content-Type":"application/json"
-                        },
-                        body:JSON.stringify({
-                            name:currentName,
-                            pathname:String(file?.pathname || ""),
-                            newName:trimmed
-                        })
-                    }
-                );
+        await loadEverything();
 
-                recent = recent.map(
-                    item => item === currentName ? trimmed : item
-                );
-                writeJSON(RECENT_KEY, recent);
+    }catch(error){
 
-                if(starred.has(currentName)){
-                    starred.delete(currentName);
-                    starred.add(trimmed);
-                    writeJSON(STAR_KEY, [...starred]);
-                }
-
-                close();
-                showToast(
-                    "File renamed successfully"
-                );
-
-                await loadEverything();
-
-            }catch(error){
-                save.disabled = false;
-                save.textContent = "Save Rename";
-                alert(error.message);
-            }
-        }
-    );
-
-    setTimeout(
-        () => {
-            input.focus();
-            input.select();
-        },
-        0
-    );
+        alert(
+            error.message
+        );
+    }
 }
-
 
 
 /* =========================================================
@@ -7247,121 +7024,23 @@ async function uploadFiles(
   This is the supported Vercel path for large media.
 */
 
-let vercelBlobPresignedUploadPromise = null;
+let vercelBlobUploadPromise = null;
 
-async function getVercelBlobPresignedUpload(){
-    if(!vercelBlobPresignedUploadPromise){
-        vercelBlobPresignedUploadPromise =
+async function getVercelBlobUpload(){
+
+    if(!vercelBlobUploadPromise){
+        vercelBlobUploadPromise =
             import("https://esm.sh/@vercel/blob@2.8.0/client?bundle")
                 .then(module => {
-                    if(typeof module.uploadPresigned !== "function"){
-                        return null;
+                    if(typeof module.upload !== "function"){
+                        throw new Error("Vercel Blob client uploader is unavailable.");
                     }
-                    return module.uploadPresigned;
+                    return module.upload;
                 });
     }
 
-    return await vercelBlobPresignedUploadPromise;
+    return await vercelBlobUploadPromise;
 }
-
-async function getSignedBlobUploadUrl(
-    pathname,
-    size,
-    multipart
-){
-    return await api(
-        "/api/blob-upload-url",
-        {
-            method:"POST",
-            headers:{
-                "Content-Type":"application/json"
-            },
-            body:JSON.stringify({
-                pathname,
-                size,
-                multipart,
-                clientPayload:JSON.stringify({
-                    size
-                })
-            })
-        }
-    );
-}
-
-
-function putFileToSignedUrl(
-    url,
-    file,
-    queue
-){
-    return new Promise((resolve, reject) => {
-        const xhr =
-            new XMLHttpRequest();
-
-        xhr.open(
-            "PUT",
-            url,
-            true
-        );
-
-        xhr.setRequestHeader(
-            "Content-Type",
-            file.type || "application/octet-stream"
-        );
-
-        xhr.upload.onprogress = event => {
-            const loaded =
-                Number(event.loaded || 0);
-
-            const total =
-                Number(event.total || file.size);
-
-            const percentage =
-                total > 0
-                    ? Math.max(0, Math.min(100, loaded / total * 100))
-                    : 0;
-
-            updateQueue(
-                queue,
-                percentage,
-                false,
-                loaded,
-                total
-            );
-        };
-
-        xhr.onload = () => {
-            if(xhr.status >= 200 && xhr.status < 300){
-                resolve();
-            }else{
-                reject(
-                    new Error(
-                        `Blob upload failed (HTTP ${xhr.status}).`
-                    )
-                );
-            }
-        };
-
-        xhr.onerror = () =>
-            reject(
-                new Error(
-                    "Network error while uploading to Vercel Blob."
-                )
-            );
-
-        xhr.onabort = () =>
-            reject(
-                new Error(
-                    "Upload was cancelled."
-                )
-            );
-
-        xhr.send(
-            file
-        );
-    });
-}
-
 
 async function uploadFile(
     file
@@ -7442,110 +7121,41 @@ async function uploadFile(
 
     try{
 
-        let uploadResult = null;
-        let lastUploadError = null;
+        const upload =
+            await getVercelBlobUpload();
 
-        // Prefer the official Vercel Blob presigned client uploader. With
-        // multipart:true it splits large files into parts, uploads parts in
-        // parallel and retries failed parts without sending file bytes through
-        // the Vercel Function.
-        const uploadPresigned =
-            await getVercelBlobPresignedUpload();
+        const blob =
+            await upload(
+                pathname,
+                file,
+                {
+                    access:"private",
+                    handleUploadUrl:"/api/blob-upload",
+                    multipart:true,
+                    clientPayload:JSON.stringify({
+                        id,
+                        size:file.size,
+                        name:file.name,
+                        relativePath
+                    }),
+                    onUploadProgress(progress){
+                        const loaded =
+                            Number(progress?.loaded || 0);
+                        const total =
+                            Number(progress?.total || file.size);
+                        const percentage =
+                            Math.max(0, Math.min(100, Number(progress?.percentage || (loaded / total * 100))));
 
-        if(typeof uploadPresigned === "function"){
-            for(let attempt = 1; attempt <= 3; attempt += 1){
-                try{
-                    const blob =
-                        await uploadPresigned(
-                            pathname,
-                            file,
-                            {
-                                access:"private",
-                                handleUploadUrl:"/api/blob-upload-url",
-                                multipart:true,
-                                clientPayload:JSON.stringify({
-                                    size:file.size,
-                                    name:file.name
-                                }),
-                                onUploadProgress(progress){
-                                    const loaded =
-                                        Number(progress?.loaded || 0);
-                                    const total =
-                                        Number(progress?.total || file.size);
-                                    const percentage =
-                                        Math.max(0, Math.min(100, Number(progress?.percentage || (loaded / total * 100))));
-
-                                    updateQueue(
-                                        queue,
-                                        percentage,
-                                        false,
-                                        loaded,
-                                        total
-                                    );
-                                }
-                            }
-                        );
-
-                    if(blob?.pathname){
-                        uploadResult = blob;
-                        break;
-                    }
-
-                    throw new Error(
-                        "Vercel Blob did not return a completed upload."
-                    );
-
-                }catch(error){
-                    lastUploadError = error;
-                    if(attempt < 3){
-                        await new Promise(
-                            resolve => setTimeout(resolve, 1200 * attempt)
+                        updateQueue(
+                            queue,
+                            percentage,
+                            false,
+                            loaded,
+                            total
                         );
                     }
                 }
-            }
-        }else{
-            // Compatibility fallback for a browser CDN build that does not
-            // expose uploadPresigned: use the same secure signed PUT URL.
-            for(let attempt = 1; attempt <= 3; attempt += 1){
-                try{
-                    const signed =
-                        await getSignedBlobUploadUrl(
-                            pathname,
-                            file.size,
-                            false
-                        );
-
-                    await putFileToSignedUrl(
-                        signed.presignedUrl,
-                        file,
-                        queue
-                    );
-
-                    uploadResult = {
-                        pathname:signed.pathname || pathname
-                    };
-                    break;
-
-                }catch(error){
-                    lastUploadError = error;
-                    if(attempt < 3){
-                        await new Promise(
-                            resolve => setTimeout(resolve, 1200 * attempt)
-                        );
-                    }
-                }
-            }
-        }
-
-        if(!uploadResult){
-            throw lastUploadError ||
-                new Error("Vercel Blob upload failed.");
-        }
-
-        const blob = {
-            pathname:uploadResult.pathname
-        };
+            );
 
         if(!blob?.pathname){
             throw new Error("Vercel Blob did not return a completed upload.");
@@ -7902,5 +7512,464 @@ document
 
                     renderFiles();
                 }
-        
-Preview truncated for large file
+            );
+        }
+    );
+
+
+/* =========================================================
+   VIEW SWITCH
+========================================================= */
+
+document
+    .getElementById(
+        "gridView"
+    )
+    .addEventListener(
+        "click",
+        () => {
+
+            currentView =
+                "grid";
+
+
+            fileList.classList.remove(
+                "listView"
+            );
+
+
+            document
+                .getElementById(
+                    "gridView"
+                )
+                .classList.add(
+                    "active"
+                );
+
+
+            document
+                .getElementById(
+                    "listView"
+                )
+                .classList.remove(
+                    "active"
+                );
+
+
+            localStorage.setItem(
+                VIEW_KEY,
+                "grid"
+            );
+        }
+    );
+
+
+document
+    .getElementById(
+        "listView"
+    )
+    .addEventListener(
+        "click",
+        () => {
+
+            currentView =
+                "list";
+
+
+            fileList.classList.add(
+                "listView"
+            );
+
+
+            document
+                .getElementById(
+                    "listView"
+                )
+                .classList.add(
+                    "active"
+                );
+
+
+            document
+                .getElementById(
+                    "gridView"
+                )
+                .classList.remove(
+                    "active"
+                );
+
+
+            localStorage.setItem(
+                VIEW_KEY,
+                "list"
+            );
+        }
+    );
+
+
+/* =========================================================
+   REFRESH
+========================================================= */
+
+async function refreshAll(){
+
+    const buttons = [
+
+        document.getElementById(
+            "refreshButton"
+        ),
+
+        document.getElementById(
+            "topRefresh"
+        )
+    ];
+
+
+    buttons.forEach(
+        button =>
+            button.classList.add(
+                "spinning"
+            )
+    );
+
+
+    try{
+
+        await loadEverything();
+
+    }finally{
+
+        setTimeout(
+            () => {
+
+                buttons.forEach(
+                    button =>
+                        button.classList.remove(
+                            "spinning"
+                        )
+                );
+
+            },
+            650
+        );
+    }
+}
+
+
+document
+    .getElementById(
+        "refreshButton"
+    )
+    .addEventListener(
+        "click",
+        refreshAll
+    );
+
+
+document
+    .getElementById(
+        "topRefresh"
+    )
+    .addEventListener(
+        "click",
+        refreshAll
+    );
+
+
+/* =========================================================
+   QR
+========================================================= */
+
+function openQRCode(){
+
+    qrCode.innerHTML =
+        "";
+
+
+    if(
+        typeof QRCode ===
+        "undefined"
+    ){
+
+        qrCode.textContent =
+            "QR unavailable";
+
+
+        showToast(
+            "QR code library unavailable"
+        );
+
+
+        qrModal.classList.add(
+            "show"
+        );
+
+
+        return;
+    }
+
+
+    const websiteURL =
+        window.location.href;
+
+
+    new QRCode(
+        qrCode,
+        {
+
+            text:
+                websiteURL,
+
+            width:
+                164,
+
+            height:
+                164,
+
+            colorDark:
+                "#07111f",
+
+            colorLight:
+                "#ffffff",
+
+            correctLevel:
+                QRCode.CorrectLevel.M
+        }
+    );
+
+
+    qrModal.classList.add(
+        "show"
+    );
+}
+
+
+function closeQRCode(){
+
+    qrModal.classList.remove(
+        "show"
+    );
+
+    qrCode.innerHTML =
+        "";
+}
+
+
+qrButton.addEventListener(
+    "click",
+    openQRCode
+);
+
+
+qrClose.addEventListener(
+    "click",
+    closeQRCode
+);
+
+
+qrModal.addEventListener(
+    "click",
+    event => {
+
+        if(
+            event.target ===
+            qrModal
+        ){
+
+            closeQRCode();
+        }
+    }
+);
+
+
+/* =========================================================
+   LOAD EVERYTHING
+========================================================= */
+
+async function loadEverything(){
+
+    try{
+
+        await Promise.all([
+            loadStorage(),
+            loadFiles()
+        ]);
+
+    }catch(error){
+
+        console.error(
+            error
+        );
+    }
+}
+
+
+/* =========================================================
+   FORMAT BYTES
+========================================================= */
+
+function formatBytes(
+    bytes
+){
+
+    const value =
+        Number(bytes);
+
+
+    if(
+        !Number.isFinite(value) ||
+        value <= 0
+    ){
+
+        return "0 B";
+    }
+
+
+    const units = [
+        "B",
+        "KB",
+        "MB",
+        "GB",
+        "TB"
+    ];
+
+
+    const index =
+        Math.min(
+            Math.floor(
+                Math.log(value) /
+                Math.log(1024)
+            ),
+            units.length - 1
+        );
+
+
+    return (
+        value /
+        Math.pow(
+            1024,
+            index
+        )
+    )
+        .toFixed(
+            index === 0
+                ? 0
+                : 1
+        ) +
+        " " +
+        units[index];
+}
+
+
+/* =========================================================
+   ESCAPE
+========================================================= */
+
+function escapeHtml(
+    value
+){
+
+    return String(value)
+
+        .replace(
+            /&/g,
+            "&amp;"
+        )
+
+        .replace(
+            /</g,
+            "&lt;"
+        )
+
+        .replace(
+            />/g,
+            "&gt;"
+        )
+
+        .replace(
+            /"/g,
+            "&quot;"
+        )
+
+        .replace(
+            /'/g,
+            "&#039;"
+        );
+}
+
+
+/* =========================================================
+   KEYBOARD
+========================================================= */
+
+document.addEventListener(
+    "keydown",
+    event => {
+
+        if(
+            event.key ===
+            "Escape"
+        ){
+
+            closeViewer();
+
+            closeQRCode();
+        }
+
+
+        if(
+            event.key === "/" &&
+
+            document.activeElement !==
+                searchInput &&
+
+            document.activeElement !==
+                password
+        ){
+
+            event.preventDefault();
+
+            searchInput.focus();
+        }
+    }
+);
+
+
+/* =========================================================
+   WELCOME / START
+========================================================= */
+
+window.addEventListener(
+    "load",
+    () => {
+
+        setTimeout(
+            welcomeVoice,
+            450
+        );
+
+
+        setTimeout(
+            () => {
+
+                intro.classList.add(
+                    "hide"
+                );
+
+
+                checkAuthentication();
+
+            },
+            2500
+        );
+    }
+);
+
+</script>
+
+</body>
+    </html>
+
+
+
+    
