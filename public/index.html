@@ -2940,6 +2940,10 @@ input[type="password"]::placeholder{
 
 
 <body>
+<div id="previewWarning" style="display:none;position:fixed;inset:0;z-index:99999;background:#07111f;color:#fff;padding:28px;font-family:system-ui,sans-serif;text-align:center;align-items:center;justify-content:center;flex-direction:column;gap:14px">
+  <div style="font-size:22px;font-weight:700">Open the Production Cloud</div>
+  <div style="max-width:420px;opacity:.82;line-height:1.5">Telegram storage is disabled on Vercel Preview URLs to protect your storage session. Open the Production URL: <b>my-cloud-io.vercel.app</b></div>
+</div>
 
 
 <!-- =======================================================
@@ -3439,6 +3443,16 @@ input[type="password"]::placeholder{
 <div id="toast"></div>
 
 
+<script>
+(function(){
+  try {
+    const host=location.hostname;
+    const isPreview=/vercel\.app$/i.test(host) && host !== 'my-cloud-io.vercel.app';
+    const box=document.getElementById('previewWarning');
+    if(isPreview && box){ box.style.display='flex'; }
+  } catch(_){}
+})();
+</script>
 <script>
 
 /* =========================================================
