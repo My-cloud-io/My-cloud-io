@@ -1,4 +1,4 @@
-Cloud-Zen 3.3.0 — Vercel + Telegram
+Cloud-Zen 3.3.7 — Vercel + Telegram
 Final upgraded build for the existing My Personal Cloud / Cloud-Zen deployment.
 Included
 public/index.html — upgraded mobile UI
@@ -41,7 +41,7 @@ This Vercel-targeted build keeps Telegram-backed dashboard requests sequential o
 3.3.5 recovery / deployment rule
 The storage index scans the complete Telegram storage chat again, so files from older Cloud-Zen versions are not hidden by a search: "CZ1" optimization.
 Upload completion no longer depends on an in-memory activeUploads map surviving across Vercel function instances; Telegram is the durable source of truth and the next file-list refresh rebuilds the index.
-Vercel Preview deployments are blocked from opening the Telegram MTProto session. Use the Production URL only. This prevents a Preview + Production pair from simultaneously using the same Telegram StringSession.
+Vercel Preview deployments are no longer blocked by the UI. Preview and Production use the same app behavior. Do not keep Preview and Production (or a local/Render process) running simultaneously with the same TELEGRAM_SESSION, because Telegram can invalidate a duplicated MTProto session.
 Keep every other local/Render/preview process that uses the same TELEGRAM_SESSION stopped. A single MTProto StringSession cannot safely be shared by independent live processes.
 No code can guarantee one MTProto connection across multiple Vercel serverless instances. For a hard single-connection guarantee, the Telegram backend must run as one persistent service/instance.
 3.3.6 upload reliability
@@ -50,3 +50,8 @@ After the final chunk, the browser updates its local file list from the upload r
 vercel.json allows the Express function up to 60 seconds when the project is running with legacy duration settings. Fluid Compute projects may allow longer defaults.
 The 4 MiB HTTP chunk remains below Vercel's documented 4.5 MB request-body limit.
 The same TELEGRAM_SESSION must still be used by only one active deployment/process. A fresh session is required if Telegram has already invalidated the old one with AUTH_KEY_DUPLICATED.
+3.3.7 preview fix
+Removed the Preview-only blank screen that incorrectly told users to open Production.
+Removed the server-side Preview deployment block.
+The existing Cloud-Zen UI, file recovery, and upload flow are unchanged.
+For reliable Telegram sessions, keep only one active deployment/process using the same TELEGRAM_SESSION while testing.
