@@ -1922,6 +1922,91 @@ input[type="password"]::placeholder{
         width .2s ease;
 }
 
+.queueSpeed{
+    margin-top:6px;
+    font-size:11px;
+    color:#8ba3c7;
+    min-height:14px;
+}
+
+/* =========================================================
+   SELECT / BULK ACTIONS
+========================================================= */
+
+.selectCheckbox{
+    position:absolute;
+    top:10px;
+    left:10px;
+    z-index:6;
+    width:22px;
+    height:22px;
+    display:none;
+    accent-color:#6ea8fe;
+    cursor:pointer;
+}
+
+.fileCard.selectable .selectCheckbox{
+    display:block;
+}
+
+.fileCard.selectable .fileTypeBadge{
+    display:none;
+}
+
+.fileCard.selected{
+    outline:2px solid #6ea8fe;
+    outline-offset:-2px;
+}
+
+.viewBtn.active{
+    background:#25344f;
+    color:#fff;
+}
+
+.bulkBar{
+    display:none;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    padding:10px 14px;
+    margin:0 0 14px;
+    border-radius:14px;
+    background:#152238;
+    border:1px solid #26354f;
+    color:#dce6f7;
+    font-size:13px;
+}
+
+.bulkBar.show{
+    display:flex;
+}
+
+.bulkActions{
+    display:flex;
+    gap:8px;
+}
+
+.bulkBtn{
+    padding:8px 14px;
+    border-radius:10px;
+    border:1px solid #33425e;
+    background:#1b2740;
+    color:#dce6f7;
+    font-weight:600;
+    cursor:pointer;
+    font-size:12px;
+}
+
+.bulkBtn.danger{
+    background:#3a1620;
+    border-color:#5c2431;
+    color:#ffb5c0;
+}
+
+.bulkBtn.ghost{
+    background:transparent;
+}
+
 
 /* =========================================================
    FILES
@@ -3129,34 +3214,17 @@ input[type="password"]::placeholder{
                 <div>
 
                     <div class="storageLabel">
-                        Cloud Storage
+                        Storage Used
                     </div>
 
                     <div
                         id="storageNumber"
                         class="storageNumber"
                     >
-                        0 B / 10 GB
+                        0 B
                     </div>
 
                 </div>
-
-                <div
-                    id="storagePercent"
-                    class="storagePercent"
-                >
-                    0%
-                </div>
-
-            </div>
-
-
-            <div class="progress">
-
-                <div
-                    id="storageBar"
-                    class="progressBar"
-                ></div>
 
             </div>
 
@@ -3164,11 +3232,7 @@ input[type="password"]::placeholder{
             <div class="storageBottom">
 
                 <span id="storageUsed">
-                    Used: 0 B
-                </span>
-
-                <span id="storageRemaining">
-                    Free: 10 GB
+                    No file size or type limits
                 </span>
 
             </div>
@@ -3234,9 +3298,32 @@ input[type="password"]::placeholder{
                     ☷
                 </button>
 
+                <button
+                    id="selectToggle"
+                    class="viewBtn"
+                    title="Select files"
+                >
+                    ☑
+                </button>
+
             </div>
 
         </div>
+
+        <div class="bulkBar" id="bulkBar">
+
+            <span id="bulkCount">0 selected</span>
+
+            <div class="bulkActions">
+
+                <button id="bulkDownload" class="bulkBtn" type="button">Download</button>
+                <button id="bulkDelete" class="bulkBtn danger" type="button">Delete</button>
+                <button id="bulkCancel" class="bulkBtn ghost" type="button">Cancel</button>
+
+            </div>
+
+        </div>
+
 
 
         <nav class="cloudTabs">
@@ -3912,24 +3999,9 @@ const storageNumber =
         "storageNumber"
     );
 
-const storagePercent =
-    document.getElementById(
-        "storagePercent"
-    );
-
-const storageBar =
-    document.getElementById(
-        "storageBar"
-    );
-
 const storageUsed =
     document.getElementById(
         "storageUsed"
-    );
-
-const storageRemaining =
-    document.getElementById(
-        "storageRemaining"
     );
 
 const searchInput =
@@ -3950,6 +4022,36 @@ const filesCount =
 const toast =
     document.getElementById(
         "toast"
+    );
+
+const selectToggle =
+    document.getElementById(
+        "selectToggle"
+    );
+
+const bulkBar =
+    document.getElementById(
+        "bulkBar"
+    );
+
+const bulkCount =
+    document.getElementById(
+        "bulkCount"
+    );
+
+const bulkDownload =
+    document.getElementById(
+        "bulkDownload"
+    );
+
+const bulkDelete =
+    document.getElementById(
+        "bulkDelete"
+    );
+
+const bulkCancel =
+    document.getElementById(
+        "bulkCancel"
     );
 
 
@@ -4417,6 +4519,7 @@ async function showDashboard(){
         "show"
     );
 
+    ensureServerConfig().catch(() => {});
     loadEverything().catch(console.error);
 }
 
@@ -4649,21 +4752,15 @@ window.cloudLogout =
 async function loadStorage(){
     const cached = readCache(STORAGE_CACHE_KEY);
     if(cached){
-        storageNumber.textContent = `${cached.usedText} / ${cached.limitText}`;
-        storagePercent.textContent = `${cached.usedPercent}%`;
-        storageBar.style.width = `${Math.min(100, Number(cached.usedPercent) || 0)}%`;
-        storageUsed.textContent = `Used: ${cached.usedText}`;
-        storageRemaining.textContent = `Free: ${cached.remainingText}`;
+        storageNumber.textContent = cached.usedText;
+        storageUsed.textContent = `${cached.fileCount ?? ""}`.trim() ? `${cached.fileCount} file(s) stored` : "No file size or type limits";
     }
 
     try{
         const data = await api("/api/storage", { cache:"no-store" });
         writeCache(STORAGE_CACHE_KEY, data);
-        storageNumber.textContent = `${data.usedText} / ${data.limitText}`;
-        storagePercent.textContent = `${data.usedPercent}%`;
-        storageBar.style.width = `${Math.min(100, Number(data.usedPercent) || 0)}%`;
-        storageUsed.textContent = `Used: ${data.usedText}`;
-        storageRemaining.textContent = `Free: ${data.remainingText}`;
+        storageNumber.textContent = data.usedText;
+        storageUsed.textContent = data.fileCount ? `${data.fileCount} file(s) stored` : "No file size or type limits";
     }catch(error){
         if(!cached) throw error;
         console.warn("Storage refresh delayed:", error);
@@ -5156,6 +5253,34 @@ function createFileCard(
     card.className =
         "fileCard";
 
+    if(selectMode) card.classList.add("selectable");
+    if(selectedNames.has(file.name)) card.classList.add("selected");
+
+    const checkbox =
+        document.createElement(
+            "input"
+        );
+
+    checkbox.type = "checkbox";
+    checkbox.className = "selectCheckbox";
+    checkbox.checked = selectedNames.has(file.name);
+    checkbox.title = "Select file";
+
+    checkbox.addEventListener("click", event => {
+        event.stopPropagation();
+        toggleSelect(file);
+    });
+
+    card.addEventListener("click", () => {
+        if(selectMode){
+            toggleSelect(file);
+            return;
+        }
+        rememberRecent(file.name);
+        if(canPreview(String(file.type || ""))) openViewer(file);
+        else downloadFile(file.name);
+    });
+
 
     const preview =
         document.createElement(
@@ -5231,7 +5356,8 @@ function createFileCard(
 
     preview.append(
         badge,
-        star
+        star,
+        checkbox
     );
 
 
@@ -5456,6 +5582,90 @@ function createFileCard(
 document.addEventListener("click", () => {
     document.querySelectorAll(".fileMenu.show").forEach(el => el.classList.remove("show"));
     document.querySelectorAll(".fileCard.menuOpen").forEach(el => el.classList.remove("menuOpen"));
+});
+
+/* =========================================================
+   SELECT / BULK ACTIONS
+========================================================= */
+
+let selectMode = false;
+const selectedNames = new Set();
+
+function updateBulkBar(){
+    bulkCount.textContent = `${selectedNames.size} selected`;
+    bulkBar.classList.toggle("show", selectMode);
+}
+
+function setSelectMode(on){
+    selectMode = on;
+    if(!on) selectedNames.clear();
+    selectToggle.classList.toggle("active", on);
+    updateBulkBar();
+    renderFiles();
+}
+
+function toggleSelect(file){
+    if(selectedNames.has(file.name)) selectedNames.delete(file.name);
+    else selectedNames.add(file.name);
+    updateBulkBar();
+    renderFiles();
+}
+
+selectToggle.addEventListener("click", () => setSelectMode(!selectMode));
+bulkCancel.addEventListener("click", () => setSelectMode(false));
+
+bulkDelete.addEventListener("click", async () => {
+    if(!selectedNames.size) return;
+    const names = [...selectedNames];
+
+    const ok = confirm(`Delete ${names.length} file(s) permanently? This cannot be undone.`);
+    if(!ok) return;
+
+    const deletePassword = prompt("Enter your delete password:");
+    if(deletePassword === null) return;
+    if(!deletePassword.trim()){
+        alert("Delete password is required.");
+        return;
+    }
+
+    try{
+        const result = await api("/api/files/bulk-delete", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({names, deletePassword})
+        });
+
+        const deletedSet = new Set(result.deleted || names);
+        for(const n of deletedSet){
+            starred.delete(n);
+            recent = recent.filter(item => item !== n);
+        }
+        writeJSON(STAR_KEY, [...starred]);
+        writeJSON(RECENT_KEY, recent);
+        allFiles = allFiles.filter(item => !deletedSet.has(item.name));
+        writeCache(FILES_CACHE_KEY, {files:allFiles, savedAt:Date.now()});
+
+        if(result.failed && result.failed.length){
+            showToast(`${deletedSet.size} deleted, ${result.failed.length} failed`);
+        }else{
+            showToast(`${deletedSet.size} file(s) deleted`);
+        }
+
+        setSelectMode(false);
+        loadEverything().catch(() => {});
+    }catch(error){
+        alert(error.message || "Bulk delete failed");
+    }
+});
+
+bulkDownload.addEventListener("click", async () => {
+    if(!selectedNames.size) return;
+    const names = [...selectedNames];
+    showToast(`Starting ${names.length} download(s)`);
+    for(const name of names){
+        downloadFile(name);
+        await new Promise(resolve => setTimeout(resolve, 400));
+    }
 });
 
 /* =========================================================
@@ -6202,26 +6412,53 @@ async function uploadFiles(
 
 
 /* =========================================================
+   SERVER UPLOAD CONFIG
+   The server is the single source of truth for chunk size — using any
+   other value here is what used to break every upload bigger than a
+   few MB. Fetched once, then reused for the whole session.
+========================================================= */
+let SERVER_CHUNK_SIZE = 20 * 1024 * 1024;
+let SERVER_UPLOAD_CONCURRENCY = 4;
+let serverConfigPromise = null;
+
+async function ensureServerConfig(){
+    if(serverConfigPromise) return serverConfigPromise;
+    serverConfigPromise = (async () => {
+        const data = await api("/api/config", { cache:"no-store" });
+        if(Number(data?.chunkSize) > 0) SERVER_CHUNK_SIZE = Number(data.chunkSize);
+        if(Number(data?.uploadConcurrency) > 0) SERVER_UPLOAD_CONCURRENCY = Number(data.uploadConcurrency);
+        return { chunkSize: SERVER_CHUNK_SIZE, concurrency: SERVER_UPLOAD_CONCURRENCY };
+    })().catch(error => {
+        serverConfigPromise = null;
+        throw error;
+    });
+    return serverConfigPromise;
+}
+
+/* =========================================================
    CHUNK UPLOAD
 ========================================================= */
-
-// Keep uploads below Vercel's function request limit.
-const CHUNK_SIZE = 4 * 1024 * 1024;
 
 function uploadChunkXHR(url, blob, onProgress){
     return new Promise((resolve,reject)=>{
         const xhr = new XMLHttpRequest();
         xhr.open("POST", url, true);
         xhr.withCredentials = true;
-        xhr.timeout = 240000;
+        xhr.timeout = 300000;
         xhr.setRequestHeader("Content-Type", "application/octet-stream");
         xhr.upload.onprogress = event => {
-            if(event.lengthComputable) onProgress(event.loaded / event.total);
+            if(event.lengthComputable) onProgress(event.loaded);
         };
         xhr.onload = () => {
             let data = null;
             try{ data = JSON.parse(xhr.responseText || "{}"); }catch(_){}
             if(xhr.status === 401){ showLogin(); reject(new Error("Session expired")); return; }
+            if(xhr.status === 429){
+                const err = new Error(data?.error || "Upload is being rate-limited, retrying...");
+                err.retryAfterMs = Math.max(1000, Number(data?.retryAfterSeconds || 5) * 1000);
+                reject(err);
+                return;
+            }
             if(xhr.status < 200 || xhr.status >= 300){ reject(new Error(data?.error || `Upload failed (${xhr.status})`)); return; }
             resolve(data);
         };
@@ -6233,39 +6470,88 @@ function uploadChunkXHR(url, blob, onProgress){
 }
 
 async function uploadFile(file){
-    const total = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+    let chunkSize = SERVER_CHUNK_SIZE;
+    let concurrency = SERVER_UPLOAD_CONCURRENCY;
+    try{
+        const config = await ensureServerConfig();
+        chunkSize = config.chunkSize;
+        concurrency = config.concurrency;
+    }catch(error){
+        console.warn("Using default upload settings:", error.message);
+    }
+
+    const total = Math.max(1, Math.ceil(file.size / chunkSize));
     const id = cryptoRandomId();
     const queue = createQueueItem(file);
-    let uploaded = 0;
-    try{
-        for(let index = 0; index < total; index++){
-            const start = index * CHUNK_SIZE;
-            const end = Math.min(file.size, start + CHUNK_SIZE);
+
+    let uploadedBytes = 0;
+    let lastTickTime = Date.now();
+    let lastTickBytes = 0;
+
+    function reportProgress(){
+        const now = Date.now();
+        const elapsed = now - lastTickTime;
+        if(elapsed >= 350){
+            const speed = ((uploadedBytes - lastTickBytes) / (elapsed / 1000));
+            updateQueue(queue, file.size ? (uploadedBytes / file.size) * 100 : 100, false, speed);
+            lastTickTime = now;
+            lastTickBytes = uploadedBytes;
+        }
+    }
+
+    const indices = Array.from({ length: total }, (_, i) => i);
+    let cursor = 0;
+    let failure = null;
+
+    async function worker(){
+        while(cursor < indices.length && !failure){
+            const index = indices[cursor++];
+            const start = index * chunkSize;
+            const end = Math.min(file.size, start + chunkSize);
             const blob = file.slice(start, end);
             const params = new URLSearchParams({id, index:String(index), total:String(total), size:String(file.size), name:file.name, relativePath:file.name});
             const url = "/api/upload-chunk?" + params.toString();
+
+            let sentForChunk = 0;
             let lastError = null;
-            for(let attempt = 1; attempt <= 3; attempt++){
+
+            for(let attempt = 1; attempt <= 5 && !failure; attempt++){
                 try{
-                    await uploadChunkXHR(url, blob, fraction => {
-                        updateQueue(queue, ((uploaded + blob.size * fraction) / Math.max(file.size,1)) * 100);
+                    await uploadChunkXHR(url, blob, loaded => {
+                        uploadedBytes += (loaded - sentForChunk);
+                        sentForChunk = loaded;
+                        reportProgress();
                     });
+                    if(sentForChunk < blob.size){
+                        uploadedBytes += (blob.size - sentForChunk);
+                        sentForChunk = blob.size;
+                    }
                     lastError = null;
                     break;
                 }catch(error){
+                    if(sentForChunk){ uploadedBytes -= sentForChunk; sentForChunk = 0; }
                     lastError = error;
-                    if(attempt < 3) await new Promise(resolve => setTimeout(resolve, 700 * attempt));
+                    if(attempt < 5){
+                        const wait = error.retryAfterMs || (800 * attempt);
+                        await new Promise(resolve => setTimeout(resolve, wait));
+                    }
                 }
             }
-            if(lastError) throw lastError;
-            uploaded += blob.size;
-            updateQueue(queue, file.size ? uploaded / file.size * 100 : 100);
+
+            if(lastError){ failure = lastError; return; }
         }
+    }
+
+    try{
+        const workers = Array.from({ length: Math.max(1, Math.min(concurrency, total)) }, () => worker());
+        await Promise.all(workers);
+        if(failure) throw failure;
+
         updateQueue(queue, 100, true);
         rememberRecent(file.name);
         showToast(`${file.name} uploaded`);
     }catch(error){
-        updateQueue(queue, uploaded / Math.max(file.size,1) * 100);
+        updateQueue(queue, file.size ? (uploadedBytes / file.size) * 100 : 0);
         throw error;
     }
 }
@@ -6345,10 +6631,19 @@ function createQueueItem(
         bar
     );
 
+    const speedLine =
+        document.createElement(
+            "div"
+        );
+
+    speedLine.className =
+        "queueSpeed";
+
 
     item.append(
         top,
-        track
+        track,
+        speedLine
     );
 
 
@@ -6360,7 +6655,8 @@ function createQueueItem(
     return {
         item,
         percent,
-        bar
+        bar,
+        speedLine
     };
 }
 
@@ -6368,7 +6664,8 @@ function createQueueItem(
 function updateQueue(
     queue,
     value,
-    done = false
+    done = false,
+    speedBytesPerSec = null
 ){
 
     const rounded =
@@ -6388,6 +6685,16 @@ function updateQueue(
 
     queue.bar.style.width =
         `${rounded}%`;
+
+
+    if(done){
+        queue.speedLine.textContent = "Done";
+    }else if(speedBytesPerSec !== null && speedBytesPerSec >= 0){
+        queue.speedLine.textContent =
+            speedBytesPerSec > 0
+                ? `${formatBytes(speedBytesPerSec)}/s`
+                : "";
+    }
 
 
     if(done){
@@ -6761,9 +7068,9 @@ qrModal.addEventListener(
 async function loadEverything(){
 
     try{
-        // Keep Telegram-backed requests sequential on Vercel.
-        // This avoids opening multiple Telegram connections at the same time
-        // during a dashboard refresh.
+        // Load the file list before storage usage, one after another,
+        // so the dashboard refresh doesn't open several storage
+        // connections at the same time.
         await loadFiles();
         await loadStorage();
 
