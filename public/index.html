@@ -2478,7 +2478,7 @@ input[type="password"]::placeholder{
     display:grid;
 
     grid-template-columns:
-        1fr 1fr 1fr;
+        repeat(4, 1fr);
 
     gap:7px;
 
@@ -5986,6 +5986,26 @@ function createFileCard(
     );
 
 
+    const rename =
+        document.createElement(
+            "button"
+        );
+
+    rename.className =
+        "fileAction";
+
+    rename.textContent =
+        "Rename";
+
+    rename.addEventListener(
+        "click",
+        event => {
+            event.stopPropagation();
+            renameFile(file);
+        }
+    );
+
+
     const del =
         document.createElement(
             "button"
@@ -6043,6 +6063,7 @@ function createFileCard(
         open,
         download,
         share,
+        rename,
         more
     );
 
@@ -6680,6 +6701,76 @@ function closeViewer(){
 
 
 /* =========================================================
+   RENAME — MANUAL ONLY
+========================================================= */
+
+async function renameFile(
+    file
+){
+
+    const currentName =
+        String(file?.name || "file");
+
+    const newName =
+        window.prompt(
+            "Enter new file name:",
+            currentName
+        );
+
+    if(newName === null){
+        return;
+    }
+
+    const trimmed =
+        String(newName).trim();
+
+    if(!trimmed){
+        alert("File name is required.");
+        return;
+    }
+
+    if(trimmed === currentName){
+        return;
+    }
+
+    try{
+
+        await api(
+            "/api/files",
+            {
+                method:"PATCH",
+                headers:{
+                    "Content-Type":"application/json"
+                },
+                body:JSON.stringify({
+                    name:currentName,
+                    pathname:String(file?.pathname || ""),
+                    newName:trimmed
+                })
+            }
+        );
+
+        recent = recent.map(
+            item => item === currentName ? trimmed : item
+        );
+        writeJSON(RECENT_KEY, recent);
+
+        showToast(
+            "File renamed successfully"
+        );
+
+        await loadEverything();
+
+    }catch(error){
+
+        alert(
+            error.message
+        );
+    }
+}
+
+
+/* =========================================================
    DELETE
 ========================================================= */
 
@@ -6939,7 +7030,7 @@ async function getVercelBlobUpload(){
 
     if(!vercelBlobUploadPromise){
         vercelBlobUploadPromise =
-            import("https://cdn.jsdelivr.net/npm/@vercel/blob@2.8.0/+esm")
+            import("https://esm.sh/@vercel/blob@2.8.0/client?bundle")
                 .then(module => {
                     if(typeof module.upload !== "function"){
                         throw new Error("Vercel Blob client uploader is unavailable.");
