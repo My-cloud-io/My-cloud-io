@@ -2940,12 +2940,6 @@ input[type="password"]::placeholder{
 
 
 <body>
-<div id="previewWarning" style="display:none;position:fixed;inset:0;z-index:99999;background:#07111f;color:#fff;padding:28px;font-family:system-ui,sans-serif;text-align:center;align-items:center;justify-content:center;flex-direction:column;gap:14px">
-  <div style="font-size:22px;font-weight:700">Open the Production Cloud</div>
-  <div style="max-width:420px;opacity:.82;line-height:1.5">Telegram storage is disabled on Vercel Preview URLs to protect your storage session. Open the Production URL: <b>my-cloud-io.vercel.app</b></div>
-</div>
-
-
 <!-- =======================================================
      REAL STAR BACKGROUND
 ======================================================= -->
@@ -3443,16 +3437,6 @@ input[type="password"]::placeholder{
 <div id="toast"></div>
 
 
-<script>
-(function(){
-  try {
-    const host=location.hostname;
-    const isPreview=/vercel\.app$/i.test(host) && host !== 'my-cloud-io.vercel.app';
-    const box=document.getElementById('previewWarning');
-    if(isPreview && box){ box.style.display='flex'; }
-  } catch(_){}
-})();
-</script>
 <script>
 
 /* =========================================================
@@ -6097,9 +6081,6 @@ fileInput.addEventListener(
 
         fileInput.value =
             "";
-
-
-        await loadEverything();
     }
 );
 
@@ -6176,9 +6157,6 @@ uploadCard.addEventListener(
         await uploadFiles(
             files
         );
-
-
-        await loadEverything();
     }
 );
 
@@ -6251,6 +6229,7 @@ async function uploadFile(file){
     const id = cryptoRandomId();
     const queue = createQueueItem(file);
     let uploaded = 0;
+    let completedFile = null;
     try{
         for(let index = 0; index < total; index++){
             const start = index * CHUNK_SIZE;
@@ -6261,9 +6240,10 @@ async function uploadFile(file){
             let lastError = null;
             for(let attempt = 1; attempt <= 3; attempt++){
                 try{
-                    await uploadChunkXHR(url, blob, fraction => {
+                    const result = await uploadChunkXHR(url, blob, fraction => {
                         updateQueue(queue, ((uploaded + blob.size * fraction) / Math.max(file.size,1)) * 100);
                     });
+                    if(result && result.file) completedFile = result.file;
                     lastError = null;
                     break;
                 }catch(error){
@@ -6277,6 +6257,19 @@ async function uploadFile(file){
         }
         updateQueue(queue, 100, true);
         rememberRecent(file.name);
+
+        // Do not immediately call /api/files here. On Vercel that extra request
+        // can be routed to another function instance and unnecessarily create
+        // another Telegram connection. The final chunk response already gives
+        // us enough metadata to show the new file instantly.
+        if(completedFile){
+            const existing = allFiles.findIndex(item => item.name === completedFile.name);
+            if(existing >= 0) allFiles[existing] = completedFile;
+            else allFiles.unshift(completedFile);
+            allFiles.sort((a,b) => String(a.name).localeCompare(String(b.name)));
+            writeCache(FILES_CACHE_KEY, {files: allFiles, savedAt: Date.now()});
+            renderFiles();
+        }
         showToast(`${file.name} uploaded`);
     }catch(error){
         updateQueue(queue, uploaded / Math.max(file.size,1) * 100);
