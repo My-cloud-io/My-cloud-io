@@ -56,12 +56,11 @@ const MAX_LOGIN_FAILURES = 3;
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const VERCEL_ENV = String(process.env.VERCEL_ENV || "").toLowerCase();
 
-// A Telegram StringSession must never be shared by Vercel Preview and Production.
-// Preview deployments are intentionally blocked from opening the MTProto session.
+// Preview deployments are allowed to use the same app code as Production.
+// IMPORTANT: do not run two live deployments/processes with the same
+// TELEGRAM_SESSION at the same time; Telegram may invalidate the session.
 function assertTelegramDeploymentAllowed() {
-  if (IS_VERCEL && VERCEL_ENV && VERCEL_ENV !== "production") {
-    throw new Error("Telegram storage is disabled on Vercel Preview deployments. Open the Production Cloud-Zen URL instead.");
-  }
+  return true;
 }
 
 if (!APP_PASSWORD || !DELETE_PASSWORD || !SESSION_SECRET) {
