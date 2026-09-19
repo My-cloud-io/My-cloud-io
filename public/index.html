@@ -6002,7 +6002,7 @@ function createFileCard(
         "click",
         () =>
             deleteFile(
-                file.name
+                file
             )
     );
 
@@ -6684,51 +6684,70 @@ function closeViewer(){
 ========================================================= */
 
 async function deleteFile(
-    name
+    file
 ){
+
+    const name =
+        typeof file === "string"
+            ? file
+            : String(file?.name || "file");
+
+    const pathname =
+        typeof file === "object" && file
+            ? String(file.pathname || "")
+            : "";
 
     const ok =
         confirm(
             `Delete "${name}" permanently?`
         );
 
-
     if(!ok){
         return;
     }
 
+    // Always ask for the real delete password before making the DELETE call.
+    // The browser masks neither native prompts nor confirms, so this prompt is
+    // intentionally separate from the destructive confirmation above.
+    const deletePassword =
+        window.prompt(
+            "Enter delete password:"
+        );
+
+    if(deletePassword === null){
+        return;
+    }
+
+    if(!String(deletePassword).trim()){
+        alert("Delete password is required.");
+        return;
+    }
 
     try{
 
         await api(
             "/api/files",
             {
-
                 method:"DELETE",
-
                 headers:{
-                    "Content-Type":
-                        "application/json"
+                    "Content-Type":"application/json"
                 },
-
-                body:
-                    JSON.stringify({
-                        name
-                    })
+                body:JSON.stringify({
+                    name,
+                    pathname,
+                    deletePassword:String(deletePassword)
+                })
             }
         );
-
 
         starred.delete(
             name
         );
 
-
         writeJSON(
             STAR_KEY,
             [...starred]
         );
-
 
         recent =
             recent.filter(
@@ -6736,17 +6755,14 @@ async function deleteFile(
                     item !== name
             );
 
-
         writeJSON(
             RECENT_KEY,
             recent
         );
 
-
         showToast(
-            "File deleted"
+            "File permanently deleted"
         );
-
 
         await loadEverything();
 
@@ -6906,244 +6922,34 @@ async function uploadFiles(
 
 
 /* =========================================================
-   REAL VERCEL BLOB UPLOAD — SIGNED DIRECT PUT
+   REAL VERCEL BLOB UPLOAD — OFFICIAL MULTIPART CLIENT
 ========================================================= */
 
 /*
-  The previous build used @vercel/blob/client + /api/blob-upload.
-  Private client-token uploads are currently the fragile part of that flow.
-  This build instead asks our authenticated server for a short-lived, exact
-  pathname-scoped private PUT URL, then sends the file bytes directly to Blob.
-  The Vercel Function never receives the file bytes.
+  Large files never pass through the Vercel Function. The official
+  @vercel/blob/client uploader creates a private client token through
+  /api/blob-upload, splits large files into Blob multipart parts, uploads
+  parts in parallel, retries failed parts, and completes the Blob upload.
+  This is the supported Vercel path for large media.
 */
 
-async function requestSignedBlobUpload(
-    pathname,
-    size,
-    contentType
-){
+let vercelBlobUploadPromise = null;
 
-    const response =
-        await fetch(
-            "/api/blob-upload-url",
-            {
-                method:"POST",
-                credentials:"same-origin",
-                headers:{
-                    "Content-Type":"application/json"
-                },
-                body:JSON.stringify({
-                    pathname,
-                    size,
-                    contentType:
-                        contentType ||
-                        "application/octet-stream"
-                })
-            }
-        );
+async function getVercelBlobUpload(){
 
-    let data = null;
-
-    try{
-        data = await response.json();
-    }catch(_){
-        data = null;
+    if(!vercelBlobUploadPromise){
+        vercelBlobUploadPromise =
+            import("https://cdn.jsdelivr.net/npm/@vercel/blob@2.8.0/+esm")
+                .then(module => {
+                    if(typeof module.upload !== "function"){
+                        throw new Error("Vercel Blob client uploader is unavailable.");
+                    }
+                    return module.upload;
+                });
     }
 
-    if(
-        response.status === 401
-    ){
-        showLogin();
-        throw new Error(
-            "Authentication required"
-        );
-    }
-
-    if(
-        !response.ok ||
-        !data?.uploadUrl
-    ){
-        throw new Error(
-            data?.error ||
-            "Could not create a secure Vercel Blob upload URL."
-        );
-    }
-
-    return data;
+    return await vercelBlobUploadPromise;
 }
-
-
-function uploadToSignedUrl(
-    uploadUrl,
-    file,
-    queue
-){
-
-    return new Promise(
-        (resolve,reject) => {
-
-            let attempt = 0;
-            let settled = false;
-
-            const run = () => {
-
-                attempt += 1;
-
-                const xhr =
-                    new XMLHttpRequest();
-
-                xhr.open(
-                    "PUT",
-                    uploadUrl,
-                    true
-                );
-
-                xhr.setRequestHeader(
-                    "Content-Type",
-                    file.type ||
-                    "application/octet-stream"
-                );
-
-                xhr.upload.onprogress =
-                    event => {
-
-                        const total =
-                            Number(
-                                event.total
-                            ) ||
-                            file.size;
-
-                        const loaded =
-                            Math.max(
-                                0,
-                                Math.min(
-                                    file.size,
-                                    Number(
-                                        event.loaded
-                                    ) || 0
-                                )
-                            );
-
-                        const percent =
-                            total > 0
-                                ? Math.max(
-                                    0,
-                                    Math.min(
-                                        100,
-                                        (loaded / total) * 100
-                                    )
-                                )
-                                : 0;
-
-                        updateQueue(
-                            queue,
-                            percent,
-                            false,
-                            loaded,
-                            file.size
-                        );
-                    };
-
-                xhr.onload = () => {
-
-                    if(
-                        xhr.status >= 200 &&
-                        xhr.status < 300
-                    ){
-
-                        if(!settled){
-                            settled = true;
-                            resolve();
-                        }
-
-                        return;
-                    }
-
-                    if(
-                        attempt < 3
-                    ){
-
-                        setTimeout(
-                            run,
-                            800 * attempt
-                        );
-
-                        return;
-                    }
-
-                    if(!settled){
-                        settled = true;
-                        reject(
-                            new Error(
-                                `Blob upload failed (HTTP ${xhr.status}).`
-                            )
-                        );
-                    }
-                };
-
-                xhr.onerror = () => {
-
-                    if(
-                        attempt < 3
-                    ){
-
-                        setTimeout(
-                            run,
-                            800 * attempt
-                        );
-
-                        return;
-                    }
-
-                    if(!settled){
-                        settled = true;
-                        reject(
-                            new Error(
-                                "Network error while uploading to Vercel Blob."
-                            )
-                        );
-                    }
-                };
-
-                xhr.onabort = () => {
-                    if(!settled){
-                        settled = true;
-                        reject(
-                            new Error(
-                                "Upload was cancelled."
-                            )
-                        );
-                    }
-                };
-
-                try{
-                    xhr.send(file);
-                }catch(error){
-
-                    if(
-                        attempt < 3
-                    ){
-
-                        setTimeout(
-                            run,
-                            800 * attempt
-                        );
-
-                        return;
-                    }
-
-                    if(!settled){
-                        settled = true;
-                        reject(error);
-                    }
-                }
-            };
-
-            run();
-        }
-    );
-}
-
 
 async function uploadFile(
     file
@@ -7196,10 +7002,7 @@ async function uploadFile(
             .map(
                 part =>
                     part
-                        .replace(
-                            /[\u0000]/g,
-                            ""
-                        )
+                        .replace(/[\u0000]/g, "")
                         .trim()
                         .slice(0,180)
             )
@@ -7227,35 +7030,56 @@ async function uploadFile(
 
     try{
 
-        const signed =
-            await requestSignedBlobUpload(
+        const upload =
+            await getVercelBlobUpload();
+
+        const blob =
+            await upload(
                 pathname,
-                file.size,
-                file.type ||
-                    "application/octet-stream"
+                file,
+                {
+                    access:"private",
+                    handleUploadUrl:"/api/blob-upload",
+                    multipart:true,
+                    clientPayload:JSON.stringify({
+                        id,
+                        size:file.size,
+                        name:file.name,
+                        relativePath
+                    }),
+                    onUploadProgress(progress){
+                        const loaded =
+                            Number(progress?.loaded || 0);
+                        const total =
+                            Number(progress?.total || file.size);
+                        const percentage =
+                            Math.max(0, Math.min(100, Number(progress?.percentage || (loaded / total * 100))));
+
+                        updateQueue(
+                            queue,
+                            percentage,
+                            false,
+                            loaded,
+                            total
+                        );
+                    }
+                }
             );
 
-        await uploadToSignedUrl(
-            signed.uploadUrl,
-            file,
-            queue
-        );
+        if(!blob?.pathname){
+            throw new Error("Vercel Blob did not return a completed upload.");
+        }
 
-        /*
-          Verify the completed Blob from the server before the UI says that
-          the file is safely stored. Only this tiny JSON request reaches the
-          Vercel Function; the file bytes go directly to Blob.
-        */
+        // Verify the completed private Blob before showing success.
         await api(
             "/api/register-upload",
             {
                 method:"POST",
                 headers:{
-                    "Content-Type":
-                        "application/json"
+                    "Content-Type":"application/json"
                 },
                 body:JSON.stringify({
-                    pathname,
+                    pathname:blob.pathname,
                     size:file.size,
                     name:file.name
                 })
@@ -7306,27 +7130,44 @@ async function uploadFiles(
     files
 ){
 
-    for(
-        const file of files
-    ){
+    const list =
+        Array.from(files || []);
 
-        try{
+    // Keep a small amount of concurrency so several ordinary files can move
+    // together without creating excessive multipart requests on a phone.
+    const concurrency =
+        Math.min(2, Math.max(1, list.length));
 
-            await uploadFile(
-                file
-            );
+    let cursor = 0;
 
-        }catch(error){
+    async function worker(){
+        while(true){
+            const index = cursor++;
+            if(index >= list.length) return;
 
-            console.error(
-                error
-            );
+            const file = list[index];
 
-            alert(
-                `${file.name}: ${error.message}`
-            );
+            try{
+                await uploadFile(
+                    file
+                );
+            }catch(error){
+                console.error(
+                    error
+                );
+                alert(
+                    `${file.name}: ${error.message}`
+                );
+            }
         }
     }
+
+    await Promise.all(
+        Array.from(
+            {length:concurrency},
+            () => worker()
+        )
+    );
 }
 
 
