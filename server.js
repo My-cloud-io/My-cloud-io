@@ -583,16 +583,62 @@ app.patch("/api/files", requireAuth, async (req, res) => {
   try {
     const oldName = cleanName(req.body?.name || "");
     const newName = cleanName(req.body?.newName || "");
-    if (!oldName || !newName || oldName === newName) return jsonError(res, 400, "Enter a different file name.");
-    const file = await findFile(oldName);
+    const requestedPath = String(req.body?.pathname || "").trim();
+
+    if (!oldName || !newName || oldName === newName) {
+      return jsonError(res, 400, "Enter a different file name.");
+    }
+
+    let file = null;
+
+    // Prefer the exact pathname from the selected card. This keeps rename
+    // correct even when two files have the same visible filename.
+    if (requestedPath) {
+      if (!requestedPath.startsWith(FILE_PREFIX) && !requestedPath.startsWith(LEGACY_FILE_PREFIX)) {
+        return jsonError(res, 400, "Invalid file path");
+      }
+      try {
+        const meta = await head(requestedPath, { access: "private", useCache: false });
+        const parsed = parseFilePath(requestedPath);
+        file = {
+          pathname: requestedPath,
+          name: parsed?.name || oldName,
+          size: Number(meta.size || 0),
+          type: meta.contentType || mimeFor(parsed?.name || oldName),
+          relativePath: parsed?.relativePath || ""
+        };
+      } catch (_) {
+        file = null;
+      }
+    }
+
+    if (!file) file = await findFile(oldName);
     if (!file) return jsonError(res, 404, "File not found");
-    const duplicate = await findFile(newName);
-    if (duplicate) return jsonError(res, 409, "A file with that name already exists.");
+
     const parsed = parseFilePath(file.pathname);
     const newPath = makePath(parsed?.id || crypto.randomUUID(), parsed?.relativePath || "", newName);
+
+    // Check the exact destination, not merely a filename elsewhere.
+    try {
+      const existing = await head(newPath, { access: "private", useCache: false });
+      if (existing) return jsonError(res, 409, "A file with that name already exists in this folder.");
+    } catch (_) {
+      // Expected when the destination does not exist.
+    }
+
     await copy(file.pathname, newPath, { access: "private", addRandomSuffix: false });
     await del(file.pathname, { access: "private" });
-    res.json({ ok: true, file: publicFile({ ...file, name: newName, pathname: newPath, type: mimeFor(newName), modified: new Date().toISOString() }) });
+
+    res.json({
+      ok: true,
+      file: publicFile({
+        ...file,
+        name: newName,
+        pathname: newPath,
+        type: mimeFor(newName),
+        modified: new Date().toISOString()
+      })
+    });
   } catch (error) {
     console.error("RENAME ERROR:", error?.stack || error);
     return jsonError(res, 500, error?.message || "Rename failed");
