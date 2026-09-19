@@ -18,7 +18,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { Readable } = require("stream");
 const archiver = require("archiver");
-const { put, get, list, del, head, copy } = require("@vercel/blob");
+const { put, get, list, del, head, copy, issueSignedToken, presignUrl } = require("@vercel/blob");
 const { handleUpload } = require("@vercel/blob/client");
 
 const app = express();
@@ -399,15 +399,82 @@ app.get("/api/files", requireAuth, async (req, res) => {
    DIRECT VERCEL BLOB CLIENT UPLOAD
 ========================= */
 app.post("/api/blob-upload-url", requireAuth, async (req, res) => {
-  // Compatibility endpoint for older browser builds. New uploads use the
-  // official @vercel/blob/client multipart uploader through /api/blob-upload.
-  const pathname = String(req.body?.pathname || "");
-  const size = Number(req.body?.size);
+  // Official Vercel Blob presigned browser upload flow. It supports both
+  // normal PUT and the SDK's multipart mode without sending file bytes
+  // through the Vercel Function.
+  const pathname = String(
+    req.body?.pathname || req.body?.payload?.pathname || ""
+  ).trim();
+  const clientPayloadRaw = String(
+    req.body?.clientPayload || req.body?.payload?.clientPayload || ""
+  );
+  let clientPayload = {};
+  try {
+    clientPayload = JSON.parse(clientPayloadRaw || "{}");
+  } catch (_) {}
+
+  const size = Number(
+    req.body?.size ||
+    req.body?.payload?.size ||
+    clientPayload.size
+  );
+  const multipart = Boolean(
+    req.body?.multipart ??
+    req.body?.payload?.multipart
+  );
+
   if (!pathname.startsWith(FILE_PREFIX)) return jsonError(res, 400, "Invalid upload path");
   if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_FILE_SIZE) {
     return jsonError(res, 400, `File size must be between 1 byte and ${formatBytes(MAX_FILE_SIZE)}`);
   }
-  return jsonError(res, 410, "This upload endpoint is legacy. Refresh the page to use the official Vercel Blob multipart uploader.");
+
+  try {
+    const validUntil = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    const token = await issueSignedToken({
+      pathname,
+      operations: ["put"],
+      maximumSizeInBytes: size,
+      validUntil
+    });
+
+    const signed = await presignUrl(token, {
+      pathname,
+      operation: "put",
+      access: "private",
+      validUntil,
+      maximumSizeInBytes: size
+    });
+
+    const parsed = new URL(signed.presignedUrl);
+    const delegationToken = parsed.searchParams.get("vercel-blob-delegation") || "";
+    const signature = parsed.searchParams.get("vercel-blob-signature") || "";
+    const params = {};
+
+    for (const [key, value] of parsed.searchParams.entries()) {
+      if (key === "vercel-blob-delegation" || key === "vercel-blob-signature") continue;
+      params[key] = value;
+    }
+
+    if (!delegationToken || !signature) {
+      throw new Error("Vercel Blob did not return a valid presigned upload payload.");
+    }
+
+    return res.json({
+      ok: true,
+      pathname,
+      multipart,
+      presignedUrl: signed.presignedUrl,
+      presignedUrlPayload: {
+        delegationToken,
+        signature,
+        params
+      },
+      expiresAt: validUntil
+    });
+  } catch (error) {
+    console.error("BLOB PRESIGNED UPLOAD ERROR:", error?.stack || error);
+    return jsonError(res, 503, error?.message || "Could not create a secure upload URL");
+  }
 });
 
 app.post("/api/blob-upload", requireAuth, async (req, res) => {
