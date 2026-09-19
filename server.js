@@ -47,7 +47,7 @@ const TELEGRAM_STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || "me").
 
 // Vercel Functions accept requests only up to a few MB. Keep this fixed so an
 // old CHUNK_SIZE environment variable can never make browser requests too large.
-const CHUNK_SIZE = 4 * 1024 * 1024;
+const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MiB: safely below Vercel's 4.5 MB request-body limit
 const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 20 * 1024 * 1024 * 1024 * 1024);
 const MAX_CHUNKS = 100000;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -98,6 +98,17 @@ let telegramClient = null;
 let telegramReady = false;
 let telegramInitPromise = null;
 let telegramLastError = null;
+
+// Serialize Telegram mutations inside a warm Vercel/Node instance.
+// This is especially important on Fluid Compute, where one instance can
+// handle multiple HTTP requests concurrently. It does not replace the rule
+// that the same StringSession must not be used by another deployment/process.
+let telegramMutationTail = Promise.resolve();
+function withTelegramMutationLock(task) {
+  const run = telegramMutationTail.then(task, task);
+  telegramMutationTail = run.catch(() => {});
+  return run;
+}
 
 async function getTelegramClient() {
   if (telegramClient && telegramReady) return telegramClient;
@@ -605,15 +616,14 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
 
     let message;
     try {
-      message = await client.sendFile(TELEGRAM_STORAGE_CHAT, {
+      message = await withTelegramMutationLock(() => client.sendFile(TELEGRAM_STORAGE_CHAT, {
         file: tmp,
         caption: captionFor(meta, index, sha256),
         forceDocument: true,
-        // Keep one Telegram file transfer worker per request. This reduces
-        // simultaneous MTProto traffic while preserving the 4 MiB HTTP chunking.
+        // One Telegram transfer at a time per warm function instance.
         workers: 1,
         progressCallback: () => {}
-      });
+      }));
     } catch (error) {
       // If Telegram rate-limits the request, leave no local data behind.
       throw error;
@@ -648,7 +658,16 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
       total,
       name,
       size,
-      sha256
+      sha256,
+      // Lets the browser update its list without immediately opening another
+      // Telegram connection after an upload.
+      file: done ? {
+        name,
+        size,
+        mime: mimeFor(name),
+        id,
+        uploadedAt: Date.now()
+      } : null
     });
   } catch (error) {
     try { await fsp.unlink(tmp); } catch (_) {}
