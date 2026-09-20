@@ -1,11 +1,12 @@
 {
   "name": "cloud-zen",
-  "version": "4.0.0",
+  "version": "3.1.0",
   "private": true,
-  "description": "Cloud-Zen Telegram MTProto private cloud backend",
+  "description": "Cloud-Zen Ultimate mobile-first private cloud workspace",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "telegram:session": "node telegram-session.js",
     "healthcheck": "node --check server.js"
   },
   "engines": {
