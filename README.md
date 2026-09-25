@@ -1,26 +1,15 @@
-My Personal Cloud — Telegram Persistent Final
-This build keeps the existing five-file project structure and uses Telegram MTProto as the durable file store.
-Required deployment model
-Run server.js as exactly ONE persistent Node.js service instance. Do not run the Telegram MTProto backend as Vercel serverless functions. Vercel can remain your frontend only; the Telegram backend must run on a persistent Node host.
-The reason is Telegram's AUTH_KEY_DUPLICATED rule: when the same authorization key is used by too many parallel main sessions/connections, Telegram invalidates the authorization key. A persistent single backend process avoids the multiple-serverless-instance problem.
-Environment variables
-APP_PASSWORD
-DELETE_PASSWORD
-SESSION_SECRET
-TELEGRAM_API_ID
-TELEGRAM_API_HASH
-TELEGRAM_SESSION
-TELEGRAM_STORAGE_CHAT (default: me)
-CHUNK_SIZE (default: 64 MiB; the browser build currently uploads 100 MiB chunks, so set this to at least 100 MiB or change the browser constant to match)
-MAX_FILE_SIZE
-NODE_ENV=production
-Important session rule
-The TELEGRAM_SESSION must be generated once for this backend and must not be copied into another running backend, local development server, or second Render/Railway instance. If Telegram has already returned AUTH_KEY_DUPLICATED, that session has been invalidated and a new session must be generated before testing again.
-Run
-npm install
-npm start
-For a new session, set TELEGRAM_API_ID and TELEGRAM_API_HASH locally and run:
-npm run telegram:session
-Copy the printed session string into the persistent host's TELEGRAM_SESSION secret.
-Storage behavior
-Uploaded chunks are sent to the configured Telegram storage chat with a CZ1|CHUNK|... caption. The file index is rebuilt from those Telegram messages, so the persistent file data does not depend on the host's local filesystem.
+Cloud-Zen — Telegram-only backend
+This build keeps the supplied dashboard and connects its /api/* calls to a real Telegram MTProto user session.
+Vercel
+Deploy the folder as a Node.js project. Add the Telegram/auth environment variables from .env.example to Production.
+The browser upload chunk is intentionally 4 MiB. Vercel documents a 4.5 MiB Function request payload limit, so the original 100 MiB browser chunk was not suitable for a Vercel Function.
+Telegram
+The backend uses GramJS with TELEGRAM_SESSION and sends files into TELEGRAM_STORAGE_CHAT. It uses Telegram's upload.saveBigFilePart flow with 512 KiB protocol parts, then creates one document message in the storage chat.
+Telegram currently documents 4000 upload parts for non-Premium and 8000 for Premium, with 512 KiB as the maximum protocol part size. That is approximately 2 GiB and 4 GiB respectively.
+Important
+This backend does not use B2, MEGA, IDrive, Cloudinary, Filebase or Koofr. The dashboard's provider display is changed to Telegram Storage only.
+DELETE_PASSWORD, if configured, is enforced on DELETE through x-delete-password. The supplied dashboard already authenticates the private session; if you want a second delete prompt in the UI, add that header from the client.
+Local
+npm install npm start
+Telegram session
+Do not paste the session string into the frontend or commit it to GitHub. Keep it only in Vercel Environment Variables.
