@@ -12,8 +12,8 @@ const { stdin: input, stdout: output } = require("node:process");
     process.exit(1);
   }
 
-  const { TelegramClient } = await import("teleproto");
-  const { StringSession } = await import("teleproto/sessions/index.js");
+  const { TelegramClient } = require("telegram");
+  const { StringSession } = require("telegram/sessions");
   const rl = readline.createInterface({ input, output });
 
   try {
