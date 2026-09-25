@@ -1,31 +1,21 @@
-My Personal Cloud — Telegram Storage
-This is the compact production project layout:
-public/index.html
-server.js
-package.json
-telegram-session.js
-README.md
-Storage
-All uploaded file data is sent to the configured Telegram storage chat through the Telegram MTProto user session. The web UI does not need the Telegram app.
-Uploads are sent as 4 MiB chunks. Telegram is the durable source of truth; the Vercel function's temporary filesystem is used only while a chunk is being transferred.
-Required Vercel Environment Variables
+My Personal Cloud — Telegram Storage Final
+This version keeps the existing mobile UI and uses Telegram MTProto as the durable storage backend.
+Important deployment rule
+Run server.js as one persistent Node.js backend process (for example Render). Do not run the MTProto storage process as Vercel Serverless Functions. Telegram can invalidate an authorization session when the same main MTProto authorization is used concurrently from multiple connections. This is the cause of the Concurrent usage of the current session ... InvokeWithLayer error.
+Required environment variables
 APP_PASSWORD
 DELETE_PASSWORD
 SESSION_SECRET
 TELEGRAM_API_ID
 TELEGRAM_API_HASH
 TELEGRAM_SESSION
-TELEGRAM_STORAGE_CHAT (default: me)
-TELEGRAM_WORKERS (optional)
+TELEGRAM_STORAGE_CHAT
+CHUNK_SIZE (recommended: 4194304)
 NODE_ENV=production
-Telegram session
-Run locally:
+TELEGRAM_STORAGE_CHAT=me uses the logged-in Telegram account's Saved Messages. A private storage channel/chat can also be used when the logged-in account has access to it.
+Fresh Telegram session
+The session shown in the previous error has been invalidated by Telegram. Generate a new session with:
 npm install
-Then:
 npm run telegram:session
-Copy the generated TELEGRAM_SESSION into the Vercel environment variables. Never commit the session string to GitHub.
-Deployment
-Vercel currently supports Express deployments with zero configuration. The server exports the Express app when VERCEL is present and uses app.listen() only for ordinary local/Node hosting.
-The browser uploads sequential 4 MiB chunks to /api/upload-chunk; each chunk is immediately stored in Telegram. The file index is rebuilt from Telegram history, so the storage data is not dependent on Vercel's temporary filesystem.
-Important
-A real Telegram session and API credentials are intentionally not included in this ZIP. They must be supplied as private Vercel environment variables.
+Save the printed value as TELEGRAM_SESSION in the backend environment. Do not reuse the invalidated session.
+The backend serializes Telegram operations so upload, index rebuild, rename, delete, preview and download do not open competing main-session requests.
