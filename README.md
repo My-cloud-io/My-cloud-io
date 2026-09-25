@@ -1,15 +1,8 @@
-Cloud-Zen — Telegram-only backend
-This build keeps the supplied dashboard and connects its /api/* calls to a real Telegram MTProto user session.
-Vercel
-Deploy the folder as a Node.js project. Add the Telegram/auth environment variables from .env.example to Production.
-The browser upload chunk is intentionally 4 MiB. Vercel documents a 4.5 MiB Function request payload limit, so the original 100 MiB browser chunk was not suitable for a Vercel Function.
-Telegram
-The backend uses GramJS with TELEGRAM_SESSION and sends files into TELEGRAM_STORAGE_CHAT. It uses Telegram's upload.saveBigFilePart flow with 512 KiB protocol parts, then creates one document message in the storage chat.
-Telegram currently documents 4000 upload parts for non-Premium and 8000 for Premium, with 512 KiB as the maximum protocol part size. That is approximately 2 GiB and 4 GiB respectively.
-Important
-This backend does not use B2, MEGA, IDrive, Cloudinary, Filebase or Koofr. The dashboard's provider display is changed to Telegram Storage only.
-DELETE_PASSWORD, if configured, is enforced on DELETE through x-delete-password. The supplied dashboard already authenticates the private session; if you want a second delete prompt in the UI, add that header from the client.
-Local
-npm install npm start
-Telegram session
-Do not paste the session string into the frontend or commit it to GitHub. Keep it only in Vercel Environment Variables.
+Cloud-Zen Telegram Backend — Vercel-safe revision
+This revision fixes two concrete problems in the previous build:
+Browser uploads are now 4 MiB chunks, compatible with Vercel's function payload limit.
+Telegram MTProto clients use autoReconnect: false and are disconnected after each HTTP response, reducing the chance of the same StringSession being held by multiple warm Vercel instances.
+IMPORTANT: AUTH_KEY_DUPLICATED can invalidate the existing Telegram authorization key. If that error has already happened, generate a fresh TELEGRAM_SESSION and put that new value in Vercel. Do not run another copy of this same session elsewhere.
+Environment variables: APP_PASSWORD DELETE_PASSWORD SESSION_SECRET TELEGRAM_API_ID TELEGRAM_API_HASH TELEGRAM_SESSION TELEGRAM_STORAGE_CHAT TELEGRAM_WORKERS NODE_ENV
+CHUNK_SIZE is no longer used for the browser request size; the frontend is fixed at 4 MiB for Vercel compatibility.
+The storage backend remains Telegram-only.
