@@ -29,6 +29,7 @@ let telegramClient = null;
 let storageEntity = null;
 let telegramInitPromise = null;
 let storageLock = Promise.resolve();
+let telegramUseCount = 0;
 
 function json(res, status, value) {
   res.status(status).json(value);
@@ -150,8 +151,8 @@ async function getTelegram() {
       API_HASH,
       {
         connectionRetries: 5,
-        autoReconnect: true,
-        requestRetries: 5
+        autoReconnect: false,
+        requestRetries: 3
       }
     );
 
@@ -171,6 +172,23 @@ async function getTelegram() {
   } finally {
     telegramInitPromise = null;
   }
+}
+
+async function releaseTelegram() {
+  if (!telegramClient) return;
+  try {
+    await telegramClient.disconnect();
+  } catch (_) {}
+  telegramClient = null;
+  storageEntity = null;
+}
+
+function telegramErrorMessage(error) {
+  const text = String(error?.message || error || "Telegram error");
+  if (text.includes("AUTH_KEY_DUPLICATED")) {
+    return "Telegram session conflict (AUTH_KEY_DUPLICATED). Create a fresh TELEGRAM_SESSION and keep only this Cloud-Zen backend connected to it.";
+  }
+  return text;
 }
 
 async function listCloudFiles() {
@@ -432,6 +450,12 @@ app.set("trust proxy", 1);
 
 app.use((req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
+  res.on("finish", () => {
+    releaseTelegram().catch(() => {});
+  });
+  res.on("close", () => {
+    releaseTelegram().catch(() => {});
+  });
   next();
 });
 
@@ -440,7 +464,7 @@ app.get("/api/health", async (req, res) => {
     await getTelegram();
     json(res, 200, { ok: true, telegram: true });
   } catch (error) {
-    json(res, 503, { ok: false, telegram: false, error: error.message });
+    json(res, 503, { ok: false, telegram: false, error: telegramErrorMessage(error) });
   }
 });
 
@@ -492,7 +516,7 @@ app.get("/api/storage", requireAuth, async (req, res) => {
     });
   } catch (error) {
     console.error("STORAGE ERROR", error);
-    json(res, 503, { error: error.message || "Telegram storage unavailable" });
+    json(res, 503, { error: telegramErrorMessage(error) || "Telegram storage unavailable" });
   }
 });
 
@@ -503,7 +527,7 @@ app.get("/api/files", requireAuth, async (req, res) => {
     json(res, 200, files);
   } catch (error) {
     console.error("FILE LIST ERROR", error);
-    json(res, 503, { error: error.message || "Could not list Telegram files" });
+    json(res, 503, { error: telegramErrorMessage(error) || "Could not list Telegram files" });
   }
 });
 
@@ -513,7 +537,7 @@ app.post("/api/upload-chunk", requireAuth, async (req, res) => {
   } catch (error) {
     console.error("UPLOAD ERROR", error);
     const status = Number(error.statusCode || 500);
-    json(res, status, { error: error.message || "Upload failed" });
+    json(res, status, { error: telegramErrorMessage(error) || "Upload failed" });
   }
 });
 
@@ -543,7 +567,7 @@ app.patch("/api/files", requireAuth, express.json({ limit: "20kb" }), async (req
     json(res, 200, { ok: true, name: newName });
   } catch (error) {
     console.error("RENAME ERROR", error);
-    json(res, 500, { error: error.message || "Rename failed" });
+    json(res, 500, { error: telegramErrorMessage(error) || "Rename failed" });
   }
 });
 
@@ -568,7 +592,7 @@ app.delete("/api/files", requireAuth, express.json({ limit: "20kb" }), async (re
     json(res, 200, { ok: true });
   } catch (error) {
     console.error("DELETE ERROR", error);
-    json(res, 500, { error: error.message || "Delete failed" });
+    json(res, 500, { error: telegramErrorMessage(error) || "Delete failed" });
   }
 });
 
@@ -616,7 +640,7 @@ app.get(/^\/api\/stream\/(.+)$/, requireAuth, async (req, res) => {
     return writeTelegramRange(res, found.message, range.start, range.end);
   } catch (error) {
     console.error("STREAM ERROR", error);
-    if (!res.headersSent) json(res, 500, { error: error.message || "Stream failed" });
+    if (!res.headersSent) json(res, 500, { error: telegramErrorMessage(error) || "Stream failed" });
     else res.destroy(error);
   }
 });
@@ -650,7 +674,7 @@ app.get(/^\/api\/download\/(.+)$/, requireAuth, async (req, res) => {
     return writeTelegramRange(res, found.message, range.start, range.end);
   } catch (error) {
     console.error("DOWNLOAD ERROR", error);
-    if (!res.headersSent) json(res, 500, { error: error.message || "Download failed" });
+    if (!res.headersSent) json(res, 500, { error: telegramErrorMessage(error) || "Download failed" });
     else res.destroy(error);
   }
 });
