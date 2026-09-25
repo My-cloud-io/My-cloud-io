@@ -1,19 +1,17 @@
 {
-  "name": "cloud-zen",
-  "version": "3.3.0",
+  "name": "cloud-zen-telegram",
+  "version": "2.0.0",
   "private": true,
-  "description": "My Personal Cloud with persistent Telegram MTProto storage",
+  "description": "Cloud-Zen private cloud with Telegram MTProto storage backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "telegram:session": "node telegram-session.js",
-    "healthcheck": "node --check server.js"
+    "check": "node --check server.js"
   },
   "engines": {
-    "node": "24.x"
+    "node": ">=20"
   },
   "dependencies": {
-    "archiver": "^7.0.1",
     "express": "^5.1.0",
     "telegram": "^2.26.22"
   }
