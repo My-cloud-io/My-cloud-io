@@ -61,8 +61,43 @@ if (!APP_PASSWORD || !DELETE_PASSWORD || !SESSION_SECRET) {
 if (!TELEGRAM_API_ID || !TELEGRAM_API_HASH || !TELEGRAM_SESSION) {
   console.warn("[Cloud-Zen] Telegram MTProto credentials are not fully configured.");
 }
-if (process.env.VERCEL) {
-  console.warn("[Cloud-Zen] WARNING: MTProto storage requires one persistent backend process. Deploy this server on Render/Railway/etc., not Vercel serverless, to avoid concurrent-session invalidation.");
+const PERSISTENT_BACKEND_REQUIRED = Boolean(process.env.VERCEL);
+if (PERSISTENT_BACKEND_REQUIRED) {
+  console.warn("[Cloud-Zen] Telegram MTProto storage is disabled on Vercel serverless. Run this backend as ONE persistent Node process (Render/Railway/etc.).");
+}
+
+// A Telegram StringSession must never be shared by multiple persistent
+// backend processes. This guard prevents accidental double-starts on the
+// same machine. It does not replace the requirement to run a single service
+// instance in your hosting provider.
+const INSTANCE_LOCK_FILE = path.join(os.tmpdir(), "cloud-zen-telegram-instance.lock");
+let instanceLockFd = null;
+function acquireInstanceLock() {
+  if (PERSISTENT_BACKEND_REQUIRED) return;
+  try {
+    instanceLockFd = fs.openSync(INSTANCE_LOCK_FILE, "wx");
+    fs.writeSync(instanceLockFd, `${process.pid}\n${new Date().toISOString()}\n`);
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      let stale = false;
+      try {
+        const text = fs.readFileSync(INSTANCE_LOCK_FILE, "utf8");
+        const pid = Number(String(text).split(/\s+/)[0]);
+        if (!pid || (process.platform !== "win32" && (() => { try { process.kill(pid, 0); return false; } catch (_) { return true; } })())) stale = true;
+      } catch (_) { stale = true; }
+      if (stale) {
+        try { fs.unlinkSync(INSTANCE_LOCK_FILE); } catch (_) {}
+        return acquireInstanceLock();
+      }
+      throw new Error("Another Cloud-Zen Telegram backend process is already using this TELEGRAM_SESSION. Stop the other instance before starting this one.");
+    }
+    throw error;
+  }
+}
+function releaseInstanceLock() {
+  try { if (instanceLockFd !== null) fs.closeSync(instanceLockFd); } catch (_) {}
+  instanceLockFd = null;
+  try { fs.unlinkSync(INSTANCE_LOCK_FILE); } catch (_) {}
 }
 
 /* =========================
@@ -104,6 +139,9 @@ function withTelegramLock(task) {
 }
 
 async function getTelegramClient() {
+  if (PERSISTENT_BACKEND_REQUIRED) {
+    throw new Error("Telegram storage requires one persistent Node.js backend process. Deploy this server as a persistent service; do not run the Telegram MTProto backend as Vercel serverless functions.");
+  }
   if (telegramClient && telegramReady) return telegramClient;
   if (telegramInitPromise) return telegramInitPromise;
 
@@ -112,8 +150,8 @@ async function getTelegramClient() {
       throw new Error("Telegram storage is not configured. Set TELEGRAM_API_ID, TELEGRAM_API_HASH and TELEGRAM_SESSION.");
     }
 
-    const { TelegramClient } = await import("teleproto");
-    const { StringSession } = await import("teleproto/sessions/index.js");
+    const { TelegramClient } = require("telegram");
+    const { StringSession } = require("telegram/sessions");
 
     const session = new StringSession(TELEGRAM_SESSION);
     const client = new TelegramClient(session, TELEGRAM_API_ID, TELEGRAM_API_HASH, {
@@ -1012,12 +1050,14 @@ app.use((err, req, res, next) => {
 async function shutdown(signal) {
   console.log(`[Cloud-Zen] ${signal} received.`);
   try { if (telegramClient) await telegramClient.disconnect(); } catch (_) {}
+  releaseInstanceLock();
   process.exit(0);
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 if (!process.env.VERCEL) {
+  acquireInstanceLock();
   app.listen(PORT, HOST, () => {
     console.log(`[Cloud-Zen] Server running on ${HOST}:${PORT}`);
     console.log(`[Cloud-Zen] Chunk size: ${formatBytes(CHUNK_SIZE)}`);
