@@ -4517,6 +4517,16 @@ async function authApi(
     options = {}
 ){
 
+    const authToken =
+        localStorage.getItem("cloud_zen_session") || "";
+
+    const headers =
+        new Headers(options.headers || {});
+
+    if(authToken && !headers.has("Authorization")){
+        headers.set("Authorization", `Bearer ${authToken}`);
+    }
+
     const response =
         await fetch(
             url,
@@ -4524,7 +4534,9 @@ async function authApi(
                 credentials:
                     "same-origin",
 
-                ...options
+                ...options,
+
+                headers
             }
         );
 
@@ -4710,23 +4722,32 @@ async function login(){
 
     try{
 
-        await authApi(
-            "/api/auth/login",
-            {
+        const loginResult =
+            await authApi(
+                "/api/auth/login",
+                {
 
-                method:"POST",
+                    method:"POST",
 
-                headers:{
-                    "Content-Type":
-                        "application/json"
-                },
+                    headers:{
+                        "Content-Type":
+                            "application/json"
+                    },
 
-                body:
-                    JSON.stringify({
-                        password:value
-                    })
-            }
-        );
+                    body:
+                        JSON.stringify({
+                            password:value
+                        })
+                }
+            );
+
+
+        if(loginResult && loginResult.token){
+            localStorage.setItem(
+                "cloud_zen_session",
+                loginResult.token
+            );
+        }
 
 
         password.value =
@@ -4824,22 +4845,17 @@ async function logout(){
             }
         );
 
-    }catch(error){
+    }catch(_){ }
 
-        console.error(
-            error
-        );
+    localStorage.removeItem("cloud_zen_session");
 
-    }finally{
+    showLogin();
 
-        showLogin();
+    password.value =
+        "";
 
-        password.value =
-            "";
-
-        loginError.textContent =
-            "";
-    }
+    loginError.textContent =
+        "";
 }
 
 
