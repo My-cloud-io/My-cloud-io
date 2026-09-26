@@ -582,7 +582,7 @@ app.get("/api/health", async (req, res) => {
 
 /* ------------------------------- frontend -------------------------------- */
 
-app.get("*", (req, res, next) => {
+app.get("/{*splat}", (req, res, next) => {
   if (req.path.startsWith("/api/")) return next();
   res.sendFile(path.join(PUBLIC_DIR, "index.html"));
 });
