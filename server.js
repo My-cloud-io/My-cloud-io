@@ -1,38 +1,119 @@
+"use strict";
+
+/*
+  CLOUD-ZEN / MY PERSONAL CLOUD
+  Telegram-only storage backend.
+
+  Storage provider:
+    Telegram MTProto account + TELEGRAM_STORAGE_CHAT
+
+  No Backblaze B2, MEGA, IDrive E2, Cloudinary, Filebase or Koofr code is used.
+
+  Important Vercel constraint:
+    Vercel Functions have a small request-body limit, so the browser uploads
+    small chunks. Each chunk becomes one Telegram document message. The
+    metadata in the caption lets the website rebuild the original file for
+    listing, preview, download, rename and delete without a separate database.
+*/
+
 const express = require("express");
-const crypto = require("crypto");
 const path = require("path");
-const { TelegramClient, Api } = require("telegram");
-const { StringSession } = require("telegram/sessions");
+const crypto = require("crypto");
+const { TelegramClient } = require("teleproto");
+const { StringSession } = require("teleproto/sessions");
 
 const app = express();
 
+/* ----------------------------- configuration ---------------------------- */
+
 const PORT = Number(process.env.PORT || 3000);
+const APP_PASSWORD = String(process.env.APP_PASSWORD || "");
+const DELETE_PASSWORD = String(process.env.DELETE_PASSWORD || APP_PASSWORD);
+const SESSION_SECRET = String(process.env.SESSION_SECRET || "");
+const TELEGRAM_API_ID = Number(process.env.TELEGRAM_API_ID || 0);
+const TELEGRAM_API_HASH = String(process.env.TELEGRAM_API_HASH || "");
+const TELEGRAM_SESSION = String(process.env.TELEGRAM_SESSION || "");
+const TELEGRAM_STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || "");
+const TELEGRAM_WORKERS = Math.max(1, Math.min(8, Number(process.env.TELEGRAM_WORKERS || 2)));
+
+// Keep this at or below the Vercel request-body ceiling.
+const CHUNK_SIZE = Math.max(
+  256 * 1024,
+  Math.min(4 * 1024 * 1024, Number(process.env.CHUNK_SIZE || 4 * 1024 * 1024))
+);
+
+const MAX_FILE_SIZE = Math.max(
+  CHUNK_SIZE,
+  Number(process.env.MAX_FILE_SIZE || 4 * 1024 * 1024 * 1024)
+);
+
+const FILE_MARKER = "CLOUDZEN1";
+const COOKIE_NAME = "cloud_session";
 const PUBLIC_DIR = path.join(__dirname, "public");
 
-const APP_PASSWORD = String(process.env.APP_PASSWORD || "");
-const DELETE_PASSWORD = String(process.env.DELETE_PASSWORD || "");
-const SESSION_SECRET = String(process.env.SESSION_SECRET || "");
-const API_ID = Number(process.env.TELEGRAM_API_ID || 0);
-const API_HASH = String(process.env.TELEGRAM_API_HASH || "");
-const TELEGRAM_SESSION = String(process.env.TELEGRAM_SESSION || "");
-const STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || "");
-const TELEGRAM_WORKERS = Math.max(1, Number(process.env.TELEGRAM_WORKERS || 2));
-
-const HTTP_CHUNK_SIZE = 4 * 1024 * 1024;
-const TELEGRAM_PART_SIZE = 512 * 1024;
-
-if (!APP_PASSWORD || !SESSION_SECRET || !API_ID || !API_HASH || !TELEGRAM_SESSION || !STORAGE_CHAT) {
-  console.warn("Cloud-Zen: one or more Telegram/auth environment variables are missing.");
+if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set.");
+if (!SESSION_SECRET) console.warn("SESSION_SECRET is not set.");
+if (!TELEGRAM_API_ID || !TELEGRAM_API_HASH || !TELEGRAM_SESSION || !TELEGRAM_STORAGE_CHAT) {
+  console.warn("Telegram environment is incomplete. Set TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION and TELEGRAM_STORAGE_CHAT.");
 }
 
-let telegramClient = null;
-let storageEntity = null;
-let telegramInitPromise = null;
-let storageLock = Promise.resolve();
-let telegramUseCount = 0;
+/* ----------------------------- body parsing ------------------------------ */
 
-function json(res, status, value) {
-  res.status(status).json(value);
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+app.use(express.json({ limit: "256kb" }));
+app.use(express.urlencoded({ extended: false, limit: "256kb" }));
+
+/* ------------------------------- sessions -------------------------------- */
+
+const sessions = new Map();
+const loginAttempts = new Map();
+
+function randomToken(bytes = 32) {
+  return crypto.randomBytes(bytes).toString("base64url");
+}
+
+function sessionSignature(token) {
+  return crypto.createHmac("sha256", SESSION_SECRET || "missing-secret").update(token).digest("base64url");
+}
+
+function createSession() {
+  const token = `${randomToken(32)}.${sessionSignature(randomToken(1))}`;
+  // Store only a hash; the cookie contains the opaque session value.
+  const id = randomToken(32);
+  const digest = crypto.createHash("sha256").update(id).digest("hex");
+  sessions.set(digest, Date.now() + 7 * 24 * 60 * 60 * 1000);
+  return id;
+}
+
+function cookieValue(req) {
+  const raw = String(req.headers.cookie || "");
+  const match = raw.split(";").map(x => x.trim()).find(x => x.startsWith(`${COOKIE_NAME}=`));
+  return match ? decodeURIComponent(match.slice(COOKIE_NAME.length + 1)) : "";
+}
+
+function isAuthenticated(req) {
+  const id = cookieValue(req);
+  if (!id) return false;
+  const digest = crypto.createHash("sha256").update(id).digest("hex");
+  const expiry = sessions.get(digest);
+  if (!expiry) return false;
+  if (expiry < Date.now()) {
+    sessions.delete(digest);
+    return false;
+  }
+  return true;
+}
+
+function requireAuth(req, res, next) {
+  if (!isAuthenticated(req)) return res.status(401).json({ error: "Authentication required" });
+  next();
+}
+
+function clearSession(req, res) {
+  const id = cookieValue(req);
+  if (id) sessions.delete(crypto.createHash("sha256").update(id).digest("hex"));
+  res.setHeader("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${process.env.NODE_ENV === "production" ? "; Secure" : ""}`);
 }
 
 function safeEqual(a, b) {
@@ -41,659 +122,484 @@ function safeEqual(a, b) {
   return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
 }
 
-function makeAuthToken() {
-  return crypto
-    .createHmac("sha256", SESSION_SECRET)
-    .update(`cloud-zen-auth:${APP_PASSWORD}`)
-    .digest("hex");
+function loginAllowed(ip) {
+  const now = Date.now();
+  const old = loginAttempts.get(ip);
+  if (!old || now - old.time > 15 * 60 * 1000) return true;
+  return old.count < 10;
 }
 
-function parseCookies(req) {
-  const raw = String(req.headers.cookie || "");
-  const out = {};
-  for (const part of raw.split(";")) {
-    const i = part.indexOf("=");
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+/* --------------------------- Telegram connection ------------------------- */
+
+let telegramClient = null;
+let telegramReady = null;
+let telegramEntity = null;
+
+async function getTelegramClient() {
+  if (!TELEGRAM_API_ID || !TELEGRAM_API_HASH || !TELEGRAM_SESSION || !TELEGRAM_STORAGE_CHAT) {
+    throw new Error("Telegram storage is not configured. Check TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION and TELEGRAM_STORAGE_CHAT.");
   }
-  return out;
-}
 
-function setAuthCookie(res) {
-  const token = makeAuthToken();
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  res.setHeader(
-    "Set-Cookie",
-    `cloud_zen_auth=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${secure}`
-  );
-}
+  if (telegramClient && telegramReady) {
+    await telegramReady;
+    return telegramClient;
+  }
 
-function clearAuthCookie(res) {
-  res.setHeader(
-    "Set-Cookie",
-    "cloud_zen_auth=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
-  );
-}
-
-function isAuthenticated(req) {
-  const token = parseCookies(req).cloud_zen_auth || "";
-  return !!SESSION_SECRET && safeEqual(token, makeAuthToken());
-}
-
-function requireAuth(req, res, next) {
-  if (!isAuthenticated(req)) return json(res, 401, { error: "Authentication required" });
-  next();
-}
-
-function withStorageLock(fn) {
-  const run = storageLock.then(fn, fn);
-  storageLock = run.catch(() => {});
-  return run;
-}
-
-function randomLong() {
-  return BigInt.asIntN(64, BigInt("0x" + crypto.randomBytes(8).toString("hex")));
-}
-
-function normalizeName(name) {
-  const value = String(name || "").replace(/\u0000/g, "").trim();
-  if (!value || value.length > 255) throw new Error("Invalid file name");
-  return value;
-}
-
-function getMessageId(message) {
-  return Number(message?.id || 0);
-}
-
-function messageDocument(message) {
-  if (message?.media?.document) return message.media.document;
-  if (message?.media?.className === "MessageMediaDocument" && message.media.document) return message.media.document;
-  return null;
-}
-
-function messagePhoto(message) {
-  if (message?.media?.photo) return message.media.photo;
-  return null;
-}
-
-function attrValue(document, className) {
-  const attrs = Array.isArray(document?.attributes) ? document.attributes : [];
-  const attr = attrs.find((x) => x?.className === className);
-  return attr || null;
-}
-
-function filenameFromDocument(document) {
-  const attr = attrValue(document, "DocumentAttributeFilename");
-  return attr?.fileName || "file";
-}
-
-function mimeFromDocument(document) {
-  return String(document?.mimeType || "application/octet-stream");
-}
-
-function captionName(message, fallback) {
-  const text = String(message?.message || "");
-  const match = text.match(/^CLOUD_ZEN_NAME:(.*)$/s);
-  return match ? normalizeName(match[1]) : fallback;
-}
-
-async function getTelegram() {
-  if (telegramClient && telegramClient.connected) return telegramClient;
-  if (telegramInitPromise) return telegramInitPromise;
-
-  telegramInitPromise = (async () => {
-    if (!API_ID || !API_HASH || !TELEGRAM_SESSION || !STORAGE_CHAT) {
-      throw new Error("Telegram environment is not configured");
-    }
-
-    const client = new TelegramClient(
+  if (!telegramClient) {
+    telegramClient = new TelegramClient(
       new StringSession(TELEGRAM_SESSION),
-      API_ID,
-      API_HASH,
-      {
-        connectionRetries: 5,
-        autoReconnect: false,
-        requestRetries: 3
-      }
+      TELEGRAM_API_ID,
+      TELEGRAM_API_HASH,
+      { connectionRetries: 5 }
     );
-
-    await client.connect();
-
-    if (!(await client.checkAuthorization())) {
-      throw new Error("TELEGRAM_SESSION is not authorized");
-    }
-
-    storageEntity = await client.getEntity(STORAGE_CHAT);
-    telegramClient = client;
-    return client;
-  })();
-
-  try {
-    return await telegramInitPromise;
-  } finally {
-    telegramInitPromise = null;
   }
-}
 
-async function releaseTelegram() {
-  if (!telegramClient) return;
-  try {
-    await telegramClient.disconnect();
-  } catch (_) {}
-  telegramClient = null;
-  storageEntity = null;
-}
-
-function telegramErrorMessage(error) {
-  const text = String(error?.message || error || "Telegram error");
-  if (text.includes("AUTH_KEY_DUPLICATED")) {
-    return "Telegram session conflict (AUTH_KEY_DUPLICATED). Create a fresh TELEGRAM_SESSION and keep only this Cloud-Zen backend connected to it.";
-  }
-  return text;
-}
-
-async function listCloudFiles() {
-  const client = await getTelegram();
-  const files = [];
-  let offsetId = 0;
-  const pageSize = 100;
-
-  // A personal storage chat can contain a large number of files.
-  // Read pages until Telegram returns fewer than a full page.
-  for (let page = 0; page < 50; page++) {
-    const messages = await client.getMessages(storageEntity, {
-      limit: pageSize,
-      ...(offsetId ? { offsetId } : {})
+  if (!telegramReady) {
+    telegramReady = (async () => {
+      await telegramClient.connect();
+      const authorized = await telegramClient.isUserAuthorized();
+      if (!authorized) throw new Error("Telegram session is not authorized. Generate a valid TELEGRAM_SESSION and add it to Vercel.");
+      telegramEntity = await telegramClient.getEntity(TELEGRAM_STORAGE_CHAT);
+      return telegramEntity;
+    })().catch(err => {
+      telegramReady = null;
+      throw err;
     });
-
-    if (!messages.length) break;
-
-    for (const message of messages) {
-      const document = messageDocument(message);
-      const photo = messagePhoto(message);
-
-      if (document) {
-        const original = filenameFromDocument(document);
-        const name = captionName(message, original);
-        const size = Number(document.size || 0);
-        files.push({
-          id: getMessageId(message),
-          name,
-          originalName: original,
-          type: mimeFromDocument(document),
-          size,
-          sizeText: formatBytes(size),
-          modified: message.date ? new Date(Number(message.date) * 1000).toISOString() : null,
-          telegramMessageId: getMessageId(message)
-        });
-      } else if (photo) {
-        // Photos sent manually to the storage chat are also exposed.
-        const size = Number(photo.sizes?.[photo.sizes.length - 1]?.size || 0);
-        const name = captionName(message, `telegram-photo-${getMessageId(message)}.jpg`);
-        files.push({
-          id: getMessageId(message),
-          name,
-          originalName: name,
-          type: "image/jpeg",
-          size,
-          sizeText: formatBytes(size),
-          modified: message.date ? new Date(Number(message.date) * 1000).toISOString() : null,
-          telegramMessageId: getMessageId(message)
-        });
-      }
-    }
-
-    const last = messages[messages.length - 1];
-    const next = getMessageId(last);
-    if (!next || messages.length < pageSize) break;
-    offsetId = next;
   }
 
+  await telegramReady;
+  return telegramClient;
+}
+
+async function getTelegramEntity() {
+  await getTelegramClient();
+  return telegramEntity;
+}
+
+/* ----------------------------- file metadata ----------------------------- */
+
+function cleanName(name) {
+  let value = String(name || "file").replace(/\\/g, "/").split("/").pop();
+  value = value.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  if (!value) value = "file";
+  return value.slice(0, 240);
+}
+
+function cleanRelativePath(name) {
+  // Keep the UI contract, but do not allow traversal.
+  const parts = String(name || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  const safe = parts.filter(p => p !== "." && p !== "..").map(p => p.replace(/[\u0000-\u001f\u007f]/g, "").trim()).filter(Boolean);
+  return safe.length ? safe.join("/").slice(0, 500) : "file";
+}
+
+function encodeCaption(meta) {
+  return `${FILE_MARKER}|${JSON.stringify(meta)}`;
+}
+
+function decodeCaption(text) {
+  const value = String(text || "");
+  if (!value.startsWith(`${FILE_MARKER}|`)) return null;
+  try {
+    const parsed = JSON.parse(value.slice(FILE_MARKER.length + 1));
+    if (!parsed || parsed.v !== 1 || !parsed.id) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+function isTelegramDocumentMessage(message) {
+  return Boolean(message && message.media && message.media.document);
+}
+
+function messageFileSize(message) {
+  return Number(message?.media?.document?.size || 0);
+}
+
+function messageMime(message) {
+  return String(message?.media?.document?.mimeType || "application/octet-stream");
+}
+
+function getDocumentName(message) {
+  const attrs = message?.media?.document?.attributes || [];
+  for (const attr of attrs) {
+    if (attr && typeof attr.fileName === "string" && attr.fileName) return attr.fileName;
+  }
+  return "file";
+}
+
+/* ------------------------------ catalog ---------------------------------- */
+
+async function collectCloudMessages() {
+  const client = await getTelegramClient();
+  const chat = await getTelegramEntity();
+  const groups = new Map();
+
+  // Search is much cheaper than downloading all chat history and only matches
+  // captions produced by this application.
+  for await (const message of client.iterMessages(chat, { search: FILE_MARKER, limit: 10000 })) {
+    const meta = decodeCaption(message?.text || message?.message || "");
+    if (!meta || !isTelegramDocumentMessage(message)) continue;
+    if (!groups.has(meta.id)) groups.set(meta.id, { meta, chunks: [] });
+    groups.get(meta.id).chunks.push({ index: Number(meta.i), messageId: Number(message.id), size: messageFileSize(message) });
+  }
+
+  const files = [];
+  for (const group of groups.values()) {
+    const { meta } = group;
+    const chunks = group.chunks.sort((a, b) => a.index - b.index);
+    const total = Number(meta.total || 0);
+    const complete = total > 0 && chunks.length === total && chunks.every((c, i) => c.index === i);
+    if (!complete) continue;
+
+    files.push({
+      name: cleanRelativePath(meta.name),
+      size: Number(meta.size || chunks.reduce((n, c) => n + c.size, 0)),
+      mimeType: String(meta.mime || "application/octet-stream"),
+      storage: "TELEGRAM",
+      updatedAt: Number(meta.updatedAt || meta.createdAt || Date.now()),
+      uploadId: meta.id,
+      chunks: chunks.map(c => c.messageId),
+      chunkCount: total
+    });
+  }
+
+  files.sort((a, b) => String(a.name).localeCompare(String(b.name)));
   return files;
 }
 
-async function findMessageByName(name) {
-  const files = await listCloudFiles();
-  const wanted = String(name);
-  const file = files.find((x) => x.name === wanted);
-  if (!file) return null;
-  const client = await getTelegram();
-  const messages = await client.getMessages(storageEntity, { ids: [file.telegramMessageId] });
-  return { file, message: messages[0] || null };
+async function findFile(name) {
+  const target = cleanRelativePath(name);
+  const files = await collectCloudMessages();
+  return files.find(f => f.name === target) || null;
 }
 
-function formatBytes(bytes) {
-  const value = Number(bytes) || 0;
-  if (value <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
-  return `${(value / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+async function findFileById(uploadId) {
+  const files = await collectCloudMessages();
+  return files.find(f => f.uploadId === uploadId) || null;
 }
 
-function fileCapacityLimit() {
-  // Telegram currently documents 4000 parts for non-Premium and 8000 for Premium,
-  // with a maximum part size of 512 KiB.
-  return 8000 * TELEGRAM_PART_SIZE;
+/* ------------------------------- uploads --------------------------------- */
+
+const uploadLocks = new Map();
+
+async function withUploadLock(id, fn) {
+  const previous = uploadLocks.get(id) || Promise.resolve();
+  let release;
+  const current = new Promise(resolve => { release = resolve; });
+  uploadLocks.set(id, previous.then(() => current));
+  try {
+    await previous;
+    return await fn();
+  } finally {
+    release();
+    if (uploadLocks.get(id) === current) uploadLocks.delete(id);
+  }
 }
 
-async function sendUploadedDocument({ fileId, parts, name, mimeType }) {
-  const client = await getTelegram();
-  const inputFile = new Api.InputFileBig({
-    id: fileId,
-    parts,
-    name
+function validUploadId(id) {
+  return /^[A-Za-z0-9_-]{12,80}$/.test(id);
+}
+
+function parseUploadParams(req) {
+  const id = String(req.query.id || "");
+  const index = Number(req.query.index);
+  const total = Number(req.query.total);
+  const size = Number(req.query.size);
+  const name = cleanRelativePath(req.query.relativePath || req.query.name || "file");
+  const mime = String(req.query.mime || "application/octet-stream").slice(0, 180);
+
+  if (!validUploadId(id)) throw Object.assign(new Error("Invalid upload ID"), { statusCode: 400 });
+  if (!Number.isInteger(index) || index < 0) throw Object.assign(new Error("Invalid chunk index"), { statusCode: 400 });
+  if (!Number.isInteger(total) || total < 1 || total > Math.ceil(MAX_FILE_SIZE / CHUNK_SIZE) + 2) throw Object.assign(new Error("Invalid chunk count"), { statusCode: 400 });
+  if (!Number.isSafeInteger(size) || size < 1 || size > MAX_FILE_SIZE) throw Object.assign(new Error("File is too large"), { statusCode: 413 });
+  if (index >= total) throw Object.assign(new Error("Chunk index out of range"), { statusCode: 400 });
+  return { id, index, total, size, name, mime };
+}
+
+async function sendChunkToTelegram(buffer, params) {
+  const client = await getTelegramClient();
+  const chat = await getTelegramEntity();
+
+  const caption = encodeCaption({
+    v: 1,
+    id: params.id,
+    i: params.index,
+    total: params.total,
+    size: params.size,
+    name: params.name,
+    mime: params.mime,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
   });
 
-  const media = new Api.InputMediaUploadedDocument({
-    file: inputFile,
-    mimeType: mimeType || "application/octet-stream",
-    attributes: [
-      new Api.DocumentAttributeFilename({ fileName: name })
-    ]
+  const fileName = `${params.id}.${String(params.index).padStart(7, "0")}.part`;
+  return client.sendFile(chat, {
+    file: buffer,
+    caption,
+    forceDocument: true,
+    fileName,
+    workers: TELEGRAM_WORKERS
   });
-
-  return client.invoke(
-    new Api.messages.SendMedia({
-      peer: storageEntity,
-      media,
-      message: "",
-      randomId: randomLong()
-    })
-  );
 }
 
-async function readRawRequest(req, maxBytes) {
-  const chunks = [];
-  let total = 0;
+/* ------------------------------- API ------------------------------------- */
 
-  for await (const chunk of req) {
-    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buf.length;
-    if (total > maxBytes) throw Object.assign(new Error("Upload chunk is too large"), { statusCode: 413 });
-    chunks.push(buf);
+app.post("/api/auth/login", (req, res) => {
+  const ip = req.ip || "unknown";
+  if (!loginAllowed(ip)) return res.status(429).json({ error: "Too many login attempts. Try again later." });
+  if (!APP_PASSWORD) return res.status(503).json({ error: "APP_PASSWORD is not configured." });
+
+  if (!safeEqual(req.body?.password || "", APP_PASSWORD)) {
+    const item = loginAttempts.get(ip) || { count: 0, time: Date.now() };
+    item.count += 1;
+    item.time = Date.now();
+    loginAttempts.set(ip, item);
+    return res.status(401).json({ error: "Incorrect password" });
   }
 
-  return Buffer.concat(chunks, total);
+  loginAttempts.delete(ip);
+  const token = createSession();
+  const secure = process.env.NODE_ENV === "production";
+  res.setHeader("Set-Cookie", `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`);
+  res.json({ ok: true });
+});
+
+app.get("/api/auth/me", (req, res) => res.json({ authenticated: isAuthenticated(req) }));
+
+app.post("/api/auth/logout", (req, res) => {
+  clearSession(req, res);
+  res.json({ ok: true });
+});
+
+app.get("/api/files", requireAuth, async (req, res) => {
+  try {
+    res.json(await collectCloudMessages());
+  } catch (error) {
+    console.error("FILE LIST ERROR:", error);
+    res.status(500).json({ error: error.message || "Could not list Telegram files" });
+  }
+});
+
+app.get("/api/storage", requireAuth, async (req, res) => {
+  try {
+    const files = await collectCloudMessages();
+    const used = files.reduce((sum, f) => sum + Number(f.size || 0), 0);
+    const limit = MAX_FILE_SIZE;
+    const percent = limit ? Math.min(100, Number(((used / limit) * 100).toFixed(2))) : 0;
+    const remaining = Math.max(0, limit - used);
+    res.json({
+      usedBytes: used,
+      limitBytes: limit,
+      remainingBytes: remaining,
+      usedText: formatBytes(used),
+      limitText: formatBytes(limit),
+      remainingText: formatBytes(remaining),
+      usedPercent: percent,
+      telegram: { configured: true, connected: true, usedBytes: used, capacityBytes: limit, remainingBytes: remaining, usedText: formatBytes(used), remainingText: formatBytes(remaining) },
+      b2: { configured: false, connected: false },
+      mega: { configured: false, connected: false },
+      idriveE2: { configured: false, connected: false },
+      cloudinary: { configured: false, connected: false },
+      filebase: { configured: false, connected: false },
+      koofr: { configured: false, connected: false }
+    });
+  } catch (error) {
+    console.error("STORAGE ERROR:", error);
+    res.status(500).json({ error: error.message || "Telegram storage unavailable" });
+  }
+});
+
+app.post("/api/upload-chunk", requireAuth, express.raw({ type: "application/octet-stream", limit: `${Math.ceil(CHUNK_SIZE / 1024 / 1024) + 1}mb` }), async (req, res) => {
+  try {
+    const params = parseUploadParams(req);
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!body.length) return res.status(400).json({ error: "Empty chunk" });
+    if (body.length > CHUNK_SIZE) return res.status(413).json({ error: `Chunk too large. Maximum is ${formatBytes(CHUNK_SIZE)}.` });
+
+    const message = await withUploadLock(params.id, () => sendChunkToTelegram(body, params));
+    res.json({ ok: true, uploadId: params.id, index: params.index, messageId: Number(message.id), storage: "TELEGRAM" });
+  } catch (error) {
+    console.error("TELEGRAM UPLOAD ERROR:", error);
+    res.status(error.statusCode || 500).json({ error: error.message || "Telegram upload failed" });
+  }
+});
+
+async function getMessagesByIds(ids) {
+  const client = await getTelegramClient();
+  const chat = await getTelegramEntity();
+  if (!ids.length) return [];
+  const messages = await client.getMessages(chat, { ids });
+  const map = new Map(messages.filter(Boolean).map(m => [Number(m.id), m]));
+  return ids.map(id => map.get(Number(id))).filter(Boolean);
 }
 
-function parseRange(header, size) {
-  if (!header) return null;
-  const match = /^bytes=(\d+)-(\d*)$/i.exec(header.trim());
-  if (!match) return null;
+async function streamTelegramFile(file, req, res) {
+  const messages = await getMessagesByIds(file.chunks);
+  const byId = new Map(messages.map(m => [Number(m.id), m]));
+  res.status(200);
+  res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+  res.setHeader("Content-Length", String(file.size));
+  res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(cleanName(file.name))}`);
 
-  const start = Number(match[1]);
-  let end = match[2] ? Number(match[2]) : size - 1;
-  if (!Number.isSafeInteger(start) || start >= size) return { invalid: true };
-  if (!Number.isSafeInteger(end) || end >= size) end = size - 1;
-  if (end < start) return { invalid: true };
-  return { start, end };
-}
-
-async function writeTelegramRange(res, message, start, end) {
-  const client = await getTelegram();
-  const total = end - start + 1;
-
-  res.setHeader("Content-Length", String(total));
-
-  // Telegram file download limits each request to <= 1 MiB.
-  const iterator = client.iterDownload({
-    file: message.media,
-    offset: start,
-    limit: total,
-    chunkSize: 1024 * 1024,
-    requestSize: 1024 * 1024,
-    stride: 1024 * 1024,
-    precise: true
-  });
-
-  for await (const chunk of iterator) {
-    if (!res.write(Buffer.from(chunk))) {
-      await new Promise((resolve) => res.once("drain", resolve));
+  for (const id of file.chunks) {
+    const message = byId.get(Number(id));
+    if (!message) throw new Error(`Telegram chunk ${id} is missing`);
+    for await (const chunk of (await getTelegramClient()).iterDownload(message)) {
+      if (res.destroyed) return;
+      if (!res.write(chunk)) await new Promise(resolve => res.once("drain", resolve));
     }
   }
   res.end();
 }
 
-async function uploadBrowserChunk(req, res) {
-  const q = req.query;
-  const uploadId = String(q.id || "");
-  const index = Number(q.index);
-  const totalBrowserChunks = Number(q.total);
-  const fileSize = Number(q.size);
-  const name = normalizeName(q.name);
-  const mimeType = String(q.type || "application/octet-stream");
-
-  if (!/^[a-fA-F0-9-]{16,128}$/.test(uploadId)) {
-    return json(res, 400, { error: "Invalid upload id" });
-  }
-  if (!Number.isInteger(index) || index < 0 || !Number.isInteger(totalBrowserChunks) || totalBrowserChunks < 1 || index >= totalBrowserChunks) {
-    return json(res, 400, { error: "Invalid upload chunk index" });
-  }
-  if (!Number.isSafeInteger(fileSize) || fileSize < 1 || fileSize > fileCapacityLimit()) {
-    return json(res, 413, {
-      error: `File is larger than the current Telegram part limit (${formatBytes(fileCapacityLimit())})`
-    });
-  }
-
-  const expectedTotal = Math.ceil(fileSize / HTTP_CHUNK_SIZE);
-  if (expectedTotal !== totalBrowserChunks) {
-    return json(res, 400, { error: "Upload chunk count does not match file size" });
-  }
-
-  const body = await readRawRequest(req, HTTP_CHUNK_SIZE);
-  if (!body.length) return json(res, 400, { error: "Empty upload chunk" });
-
-  // Each Vercel request is 4 MiB max. Telegram's MTProto upload parts are 512 KiB.
-  const firstTelegramPart = index * (HTTP_CHUNK_SIZE / TELEGRAM_PART_SIZE);
-  const parts = Math.ceil(fileSize / TELEGRAM_PART_SIZE);
-
-  if (firstTelegramPart >= parts) {
-    return json(res, 400, { error: "Invalid Telegram part offset" });
-  }
-
-  await withStorageLock(async () => {
-    const client = await getTelegram();
-    for (let local = 0; local < Math.ceil(body.length / TELEGRAM_PART_SIZE); local++) {
-      const slice = body.subarray(
-        local * TELEGRAM_PART_SIZE,
-        Math.min(body.length, (local + 1) * TELEGRAM_PART_SIZE)
-      );
-      const partNumber = firstTelegramPart + local;
-
-      let ok = false;
-      for (let attempt = 0; attempt < 5 && !ok; attempt++) {
-        try {
-          ok = await client.invoke(
-            new Api.upload.SaveBigFilePart({
-              fileId: BigInt("0x" + uploadId.replace(/-/g, "").slice(0, 16)),
-              filePart: partNumber,
-              fileTotalParts: parts,
-              bytes: slice
-            })
-          );
-        } catch (error) {
-          if (attempt === 4) throw error;
-          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
-        }
-      }
-
-      if (!ok) throw new Error(`Telegram rejected part ${partNumber}`);
+async function streamTelegramDownload(file, res) {
+  const messages = await getMessagesByIds(file.chunks);
+  const byId = new Map(messages.map(m => [Number(m.id), m]));
+  res.status(200);
+  res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+  res.setHeader("Content-Length", String(file.size));
+  res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(cleanName(file.name))}`);
+  for (const id of file.chunks) {
+    const message = byId.get(Number(id));
+    if (!message) throw new Error(`Telegram chunk ${id} is missing`);
+    for await (const chunk of (await getTelegramClient()).iterDownload(message)) {
+      if (!res.write(chunk)) await new Promise(resolve => res.once("drain", resolve));
     }
-  });
-
-  const lastChunk = index === totalBrowserChunks - 1;
-
-  if (lastChunk) {
-    await withStorageLock(async () => {
-      const client = await getTelegram();
-      const fileId = BigInt("0x" + uploadId.replace(/-/g, "").slice(0, 16));
-      await sendUploadedDocument({
-        fileId,
-        parts,
-        name,
-        mimeType
-      });
-    });
   }
-
-  return json(res, 200, {
-    ok: true,
-    id: uploadId,
-    index,
-    total: totalBrowserChunks,
-    complete: lastChunk,
-    percent: ((index + 1) / totalBrowserChunks) * 100
-  });
-}
-
-app.disable("x-powered-by");
-app.set("trust proxy", 1);
-
-app.use((req, res, next) => {
-  res.setHeader("Cache-Control", "no-store");
-  res.on("finish", () => {
-    releaseTelegram().catch(() => {});
-  });
-  res.on("close", () => {
-    releaseTelegram().catch(() => {});
-  });
-  next();
-});
-
-app.get("/api/health", async (req, res) => {
-  try {
-    await getTelegram();
-    json(res, 200, { ok: true, telegram: true });
-  } catch (error) {
-    json(res, 503, { ok: false, telegram: false, error: telegramErrorMessage(error) });
-  }
-});
-
-app.post("/api/auth/login", express.json({ limit: "20kb" }), (req, res) => {
-  const password = String(req.body?.password || "");
-  if (!APP_PASSWORD || !safeEqual(password, APP_PASSWORD)) {
-    return json(res, 401, { error: "Invalid password" });
-  }
-  setAuthCookie(res);
-  return json(res, 200, { authenticated: true });
-});
-
-app.get("/api/auth/me", (req, res) => {
-  json(res, 200, { authenticated: isAuthenticated(req) });
-});
-
-app.post("/api/auth/logout", (req, res) => {
-  clearAuthCookie(res);
-  json(res, 200, { authenticated: false });
-});
-
-app.get("/api/storage", requireAuth, async (req, res) => {
-  try {
-    const files = await listCloudFiles();
-    const usedBytes = files.reduce((sum, file) => sum + Number(file.size || 0), 0);
-    const limitBytes = fileCapacityLimit();
-    const remainingBytes = Math.max(0, limitBytes - usedBytes);
-    const usedPercent = limitBytes ? Number(((usedBytes / limitBytes) * 100).toFixed(2)) : 0;
-
-    json(res, 200, {
-      usedBytes,
-      limitBytes,
-      remainingBytes,
-      usedPercent,
-      usedText: formatBytes(usedBytes),
-      limitText: formatBytes(limitBytes),
-      remainingText: formatBytes(remainingBytes),
-      telegram: {
-        configured: true,
-        connected: true,
-        usedBytes,
-        capacityBytes: limitBytes,
-        remainingBytes,
-        usedText: formatBytes(usedBytes),
-        remainingText: formatBytes(remainingBytes),
-        limitText: formatBytes(limitBytes),
-        usedPercent
-      }
-    });
-  } catch (error) {
-    console.error("STORAGE ERROR", error);
-    json(res, 503, { error: telegramErrorMessage(error) || "Telegram storage unavailable" });
-  }
-});
-
-app.get("/api/files", requireAuth, async (req, res) => {
-  try {
-    const files = await listCloudFiles();
-    files.sort((a, b) => new Date(b.modified || 0) - new Date(a.modified || 0));
-    json(res, 200, files);
-  } catch (error) {
-    console.error("FILE LIST ERROR", error);
-    json(res, 503, { error: telegramErrorMessage(error) || "Could not list Telegram files" });
-  }
-});
-
-app.post("/api/upload-chunk", requireAuth, async (req, res) => {
-  try {
-    await uploadBrowserChunk(req, res);
-  } catch (error) {
-    console.error("UPLOAD ERROR", error);
-    const status = Number(error.statusCode || 500);
-    json(res, status, { error: telegramErrorMessage(error) || "Upload failed" });
-  }
-});
-
-app.patch("/api/files", requireAuth, express.json({ limit: "20kb" }), async (req, res) => {
-  try {
-    const oldName = normalizeName(req.body?.name);
-    const newName = normalizeName(req.body?.newName);
-    if (oldName === newName) return json(res, 200, { ok: true });
-
-    const found = await findMessageByName(oldName);
-    if (!found?.message) return json(res, 404, { error: "File not found" });
-
-    const existing = await listCloudFiles();
-    if (existing.some((f) => f.name === newName)) {
-      return json(res, 409, { error: "A file with that name already exists" });
-    }
-
-    const client = await getTelegram();
-    await client.invoke(
-      new Api.messages.EditMessage({
-        peer: storageEntity,
-        id: found.file.telegramMessageId,
-        message: `CLOUD_ZEN_NAME:${newName}`
-      })
-    );
-
-    json(res, 200, { ok: true, name: newName });
-  } catch (error) {
-    console.error("RENAME ERROR", error);
-    json(res, 500, { error: telegramErrorMessage(error) || "Rename failed" });
-  }
-});
-
-app.delete("/api/files", requireAuth, express.json({ limit: "20kb" }), async (req, res) => {
-  try {
-    const name = normalizeName(req.body?.name);
-    const found = await findMessageByName(name);
-    if (!found?.message) return json(res, 404, { error: "File not found" });
-
-    // DELETE_PASSWORD is accepted as an optional second factor via header.
-    // If it is configured, the client must provide it; otherwise the authenticated
-    // cloud session is sufficient.
-    if (DELETE_PASSWORD) {
-      const supplied = String(req.headers["x-delete-password"] || "");
-      if (!safeEqual(supplied, DELETE_PASSWORD)) {
-        return json(res, 403, { error: "Delete password required" });
-      }
-    }
-
-    const client = await getTelegram();
-    await client.deleteMessages(storageEntity, [found.file.telegramMessageId], { revoke: true });
-    json(res, 200, { ok: true });
-  } catch (error) {
-    console.error("DELETE ERROR", error);
-    json(res, 500, { error: telegramErrorMessage(error) || "Delete failed" });
-  }
-});
-
-async function resolveFile(req, res) {
-  const rawName = Array.isArray(req.params[0]) ? req.params[0].join("/") : req.params[0];
-  const name = decodeURIComponent(String(rawName || ""));
-  const found = await findMessageByName(name);
-  if (!found?.message) {
-    json(res, 404, { error: "File not found" });
-    return null;
-  }
-  return found;
+  res.end();
 }
 
 app.get(/^\/api\/stream\/(.+)$/, requireAuth, async (req, res) => {
   try {
-    const found = await resolveFile(req, res);
-    if (!found) return;
-
-    const document = messageDocument(found.message);
-    const photo = messagePhoto(found.message);
-    const size = Number(document?.size || 0);
-
-    if (!document && !photo) return json(res, 415, { error: "Unsupported Telegram media" });
-
-    const mimeType = document ? mimeFromDocument(document) : "image/jpeg";
-    const range = parseRange(req.headers.range, size);
-
-    res.setHeader("Accept-Ranges", "bytes");
-    res.setHeader("Content-Type", mimeType);
-    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(found.file.name)}`);
-
-    if (range?.invalid) {
-      res.setHeader("Content-Range", `bytes */${size}`);
-      return res.status(416).end();
-    }
-
-    if (!range) {
-      res.status(200);
-      return writeTelegramRange(res, found.message, 0, Math.max(0, size - 1));
-    }
-
-    res.status(206);
-    res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${size}`);
-    return writeTelegramRange(res, found.message, range.start, range.end);
+    const file = await findFile(decodeURIComponent(req.params[0]));
+    if (!file) return res.status(404).send("File not found");
+    await streamTelegramFile(file, req, res);
   } catch (error) {
-    console.error("STREAM ERROR", error);
-    if (!res.headersSent) json(res, 500, { error: telegramErrorMessage(error) || "Stream failed" });
+    console.error("STREAM ERROR:", error);
+    if (!res.headersSent) res.status(500).send(error.message || "Stream failed");
     else res.destroy(error);
   }
 });
 
 app.get(/^\/api\/download\/(.+)$/, requireAuth, async (req, res) => {
   try {
-    const found = await resolveFile(req, res);
-    if (!found) return;
-
-    const document = messageDocument(found.message);
-    const photo = messagePhoto(found.message);
-    const size = Number(document?.size || 0);
-    if (!document && !photo) return json(res, 415, { error: "Unsupported Telegram media" });
-
-    res.setHeader("Accept-Ranges", "bytes");
-    res.setHeader("Content-Type", document ? mimeFromDocument(document) : "image/jpeg");
-    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(found.file.name)}`);
-
-    const range = parseRange(req.headers.range, size);
-    if (range?.invalid) {
-      res.setHeader("Content-Range", `bytes */${size}`);
-      return res.status(416).end();
-    }
-
-    if (!range) {
-      return writeTelegramRange(res, found.message, 0, Math.max(0, size - 1));
-    }
-
-    res.status(206);
-    res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${size}`);
-    return writeTelegramRange(res, found.message, range.start, range.end);
+    const file = await findFile(decodeURIComponent(req.params[0]));
+    if (!file) return res.status(404).send("File not found");
+    await streamTelegramDownload(file, res);
   } catch (error) {
-    console.error("DOWNLOAD ERROR", error);
-    if (!res.headersSent) json(res, 500, { error: telegramErrorMessage(error) || "Download failed" });
+    console.error("DOWNLOAD ERROR:", error);
+    if (!res.headersSent) res.status(500).send(error.message || "Download failed");
     else res.destroy(error);
   }
 });
 
-// Static frontend
-app.use(express.static(PUBLIC_DIR, {
-  etag: true,
-  maxAge: "1h",
-  index: "index.html"
-}));
+app.put("/api/files", requireAuth, async (req, res) => {
+  try {
+    const oldName = cleanRelativePath(req.body?.oldName || req.body?.name || "");
+    const newName = cleanRelativePath(req.body?.newName || "");
+    if (!oldName || !newName) return res.status(400).json({ error: "Old and new file names are required" });
 
-app.get(/.*/, (req, res) => {
+    const file = await findFile(oldName);
+    if (!file) return res.status(404).json({ error: "File not found" });
+    if (await findFile(newName)) return res.status(409).json({ error: "A file with that name already exists" });
+
+    const client = await getTelegramClient();
+    const chat = await getTelegramEntity();
+    const messages = await getMessagesByIds(file.chunks);
+
+    const concurrency = Math.max(1, Math.min(TELEGRAM_WORKERS, 4));
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < messages.length) {
+        const message = messages[cursor++];
+        const oldMeta = decodeCaption(message.text || message.message || "");
+        if (!oldMeta) continue;
+        const nextMeta = { ...oldMeta, name: newName, updatedAt: Date.now() };
+        await client.editMessage(chat, { message: message.id, text: encodeCaption(nextMeta) });
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, worker));
+    res.json({ ok: true, name: newName, storage: "TELEGRAM" });
+  } catch (error) {
+    console.error("RENAME ERROR:", error);
+    res.status(500).json({ error: error.message || "Rename failed" });
+  }
+});
+
+app.delete("/api/files", requireAuth, async (req, res) => {
+  try {
+    const name = cleanRelativePath(req.body?.name || "");
+    if (!name) return res.status(400).json({ error: "File name missing" });
+    if (DELETE_PASSWORD && !safeEqual(req.body?.deletePassword || DELETE_PASSWORD, DELETE_PASSWORD)) {
+      return res.status(403).json({ error: "Delete password is incorrect" });
+    }
+
+    const file = await findFile(name);
+    if (!file) return res.status(404).json({ error: "File not found" });
+
+    const client = await getTelegramClient();
+    const chat = await getTelegramEntity();
+    for (let i = 0; i < file.chunks.length; i += 100) {
+      await client.deleteMessages(chat, file.chunks.slice(i, i + 100), { revoke: true });
+    }
+    res.json({ ok: true, name, storage: "TELEGRAM", message: "File permanently deleted" });
+  } catch (error) {
+    console.error("DELETE ERROR:", error);
+    res.status(500).json({ error: error.message || "Delete failed" });
+  }
+});
+
+app.delete("/api/upload/:id", requireAuth, async (req, res) => {
+  // Cancel a partially uploaded file by deleting its already-uploaded chunks.
+  try {
+    const id = String(req.params.id || "");
+    if (!validUploadId(id)) return res.status(400).json({ error: "Invalid upload ID" });
+    const files = await collectCloudMessages();
+    const partial = files.find(f => f.uploadId === id);
+    if (partial) {
+      const client = await getTelegramClient();
+      const chat = await getTelegramEntity();
+      for (let i = 0; i < partial.chunks.length; i += 100) {
+        await client.deleteMessages(chat, partial.chunks.slice(i, i + 100), { revoke: true });
+      }
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not cancel upload" });
+  }
+});
+
+app.get("/api/health", async (req, res) => {
+  try {
+    const client = await getTelegramClient();
+    const me = await client.getMe();
+    res.json({ ok: true, telegram: { connected: true, authorized: true, userId: String(me?.id || "") } });
+  } catch (error) {
+    res.status(503).json({ ok: false, telegram: { connected: false }, error: error.message || "Telegram unavailable" });
+  }
+});
+
+/* ------------------------------- frontend -------------------------------- */
+
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/api/")) return next();
   res.sendFile(path.join(PUBLIC_DIR, "index.html"));
 });
 
-module.exports = app;
-
-if (require.main === module) {
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Cloud-Zen server listening on 0.0.0.0:${PORT}`);
-  });
+function formatBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = n;
+  let i = -1;
+  do { value /= 1024; i++; } while (value >= 1024 && i < units.length - 1);
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[i]}`;
 }
+
+// Local/Render compatibility. Vercel can import the Express app without a listener.
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Cloud-Zen Telegram server listening on ${PORT}`));
+}
+
+module.exports = app;
