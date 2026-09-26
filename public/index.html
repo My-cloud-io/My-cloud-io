@@ -4556,16 +4556,10 @@ async function authApi(
         !response.ok
     ){
 
-        const requestError =
-            new Error(
-                data?.error ||
-                "Request failed"
-            );
-
-        requestError.status =
-            response.status;
-
-        throw requestError;
+        throw new Error(
+            data?.error ||
+            "Request failed"
+        );
     }
 
 
@@ -4908,10 +4902,41 @@ function renderStorageProviders(data){
 
 
     const providers = [
+
         {
-            key:"telegram",
-            name:"Telegram Storage",
-            data:data.telegram || {}
+            key:"b2",
+            name:"Backblaze B2",
+            data:data.b2 || {}
+        },
+
+        {
+            key:"mega",
+            name:"MEGA",
+            data:data.mega || {}
+        },
+
+        {
+            key:"idriveE2",
+            name:"IDrive E2",
+            data:data.idriveE2 || {}
+        },
+
+        {
+            key:"cloudinary",
+            name:"Cloudinary",
+            data:data.cloudinary || {}
+        },
+
+        {
+            key:"filebase",
+            name:"Filebase",
+            data:data.filebase || {}
+        },
+
+        {
+            key:"koofr",
+            name:"Koofr",
+            data:data.koofr || {}
         }
     ];
 
@@ -5937,27 +5962,10 @@ function createFileCard(
     );
 
 
-    const rename =
-        document.createElement(
-            "button"
-        );
-
-    rename.className =
-        "fileAction";
-
-    rename.textContent =
-        "Rename";
-
-    rename.addEventListener(
-        "click",
-        () => renameFile(file)
-    );
-
     actions.append(
         open,
         download,
-        share,
-        rename
+        share
     );
 
 
@@ -6574,48 +6582,6 @@ function closeViewer(){
 
 
 /* =========================================================
-   RENAME
-========================================================= */
-
-async function renameFile(file){
-    const nextName =
-        window.prompt(
-            "New file name:",
-            file.name
-        );
-
-    if(
-        !nextName ||
-        nextName.trim() === "" ||
-        nextName.trim() === file.name
-    ){
-        return;
-    }
-
-    try{
-        await api(
-            "/api/files",
-            {
-                method:"PATCH",
-                headers:{
-                    "Content-Type":"application/json"
-                },
-                body:JSON.stringify({
-                    name:file.name,
-                    newName:nextName.trim()
-                })
-            }
-        );
-
-        showToast("File renamed");
-        await loadEverything();
-    }catch(error){
-        alert(error.message);
-    }
-}
-
-
-/* =========================================================
    DELETE
 ========================================================= */
 
@@ -6687,53 +6653,6 @@ async function deleteFile(
         await loadEverything();
 
     }catch(error){
-
-        if(error?.status === 403){
-
-            const deletePassword =
-                window.prompt(
-                    "Delete password:"
-                );
-
-            if(deletePassword){
-
-                try{
-
-                    await api(
-                        "/api/files",
-                        {
-                            method:"DELETE",
-                            headers:{
-                                "Content-Type":
-                                    "application/json",
-                                "x-delete-password":
-                                    deletePassword
-                            },
-                            body:
-                                JSON.stringify({
-                                    name
-                                })
-                        }
-                    );
-
-                    showToast(
-                        "File deleted"
-                    );
-
-                    await loadEverything();
-                    return;
-
-                }catch(retryError){
-
-                    alert(
-                        retryError.message
-                    );
-                    return;
-                }
-            }
-
-            return;
-        }
 
         alert(
             error.message
@@ -6893,7 +6812,7 @@ async function uploadFiles(
 ========================================================= */
 
 const CHUNK_SIZE =
-    100 * 1024 * 1024;
+    4 * 1024 * 1024;
 
 
 async function uploadFile(
@@ -6965,7 +6884,11 @@ async function uploadFile(
                     file.name,
 
                 relativePath:
-                    file.name
+                    file.name,
+
+                mime:
+                    file.type ||
+                    "application/octet-stream"
             });
 
 
