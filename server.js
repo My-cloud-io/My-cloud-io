@@ -46,10 +46,14 @@ const MAX_FILE_SIZE = Math.max(
   CHUNK_SIZE,
   Number(process.env.MAX_FILE_SIZE || 4 * 1024 * 1024 * 1024)
 );
+const STORAGE_DISPLAY_BYTES = Math.max(
+  1,
+  Number(process.env.STORAGE_DISPLAY_BYTES || 10 * 1024 * 1024 * 1024)
+);
 
 const FILE_MARKER = "CLOUDZEN1";
 const COOKIE_NAME = "cloud_session";
-const PUBLIC_DIR = path.join(__dirname, "public");
+const PUBLIC_DIR = __dirname;
 
 if (!APP_PASSWORD) console.warn("APP_PASSWORD is not set.");
 if (!SESSION_SECRET) console.warn("SESSION_SECRET is not set.");
@@ -66,43 +70,68 @@ app.use(express.urlencoded({ extended: false, limit: "256kb" }));
 
 /* ------------------------------- sessions -------------------------------- */
 
-const sessions = new Map();
 const loginAttempts = new Map();
 
 function randomToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString("base64url");
 }
 
-function sessionSignature(token) {
-  return crypto.createHmac("sha256", SESSION_SECRET || "missing-secret").update(token).digest("base64url");
+/*
+ * Vercel Functions are stateless: a request after /api/auth/login can land
+ * on a different function instance. Therefore authentication must NOT rely
+ * on an in-memory session Map. The cookie below is a signed, self-contained
+ * session token and can be verified by any Vercel instance.
+ */
+function sessionSignature(payload) {
+  return crypto
+    .createHmac("sha256", SESSION_SECRET || "missing-secret")
+    .update(payload)
+    .digest("base64url");
 }
 
 function createSession() {
-  const token = `${randomToken(32)}.${sessionSignature(randomToken(1))}`;
-  // Store only a hash; the cookie contains the opaque session value.
-  const id = randomToken(32);
-  const digest = crypto.createHash("sha256").update(id).digest("hex");
-  sessions.set(digest, Date.now() + 7 * 24 * 60 * 60 * 1000);
-  return id;
+  const exp = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  const payload = `${exp}.${randomToken(32)}`;
+  return `${payload}.${sessionSignature(payload)}`;
 }
 
 function cookieValue(req) {
   const raw = String(req.headers.cookie || "");
-  const match = raw.split(";").map(x => x.trim()).find(x => x.startsWith(`${COOKIE_NAME}=`));
+  const match = raw
+    .split(";")
+    .map(x => x.trim())
+    .find(x => x.startsWith(`${COOKIE_NAME}=`));
   return match ? decodeURIComponent(match.slice(COOKIE_NAME.length + 1)) : "";
 }
 
+function bearerValue(req) {
+  const header = String(req.headers.authorization || "");
+  if (!header.toLowerCase().startsWith("bearer ")) return "";
+  return header.slice(7).trim();
+}
+
+function verifySessionToken(token) {
+  if (!token || !SESSION_SECRET) return false;
+
+  const parts = String(token).split(".");
+  if (parts.length !== 3) return false;
+
+  const [exp, nonce, signature] = parts;
+  if (!/^\d+$/.test(exp) || !nonce || !signature) return false;
+
+  const payload = `${exp}.${nonce}`;
+  const expected = sessionSignature(payload);
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  return Number(exp) > Date.now();
+}
+
 function isAuthenticated(req) {
-  const id = cookieValue(req);
-  if (!id) return false;
-  const digest = crypto.createHash("sha256").update(id).digest("hex");
-  const expiry = sessions.get(digest);
-  if (!expiry) return false;
-  if (expiry < Date.now()) {
-    sessions.delete(digest);
-    return false;
-  }
-  return true;
+  // Prefer the HttpOnly cookie. The Authorization fallback is useful for
+  // embedded/mobile browsers that do not reliably persist Set-Cookie.
+  return verifySessionToken(cookieValue(req)) || verifySessionToken(bearerValue(req));
 }
 
 function requireAuth(req, res, next) {
@@ -111,8 +140,6 @@ function requireAuth(req, res, next) {
 }
 
 function clearSession(req, res) {
-  const id = cookieValue(req);
-  if (id) sessions.delete(crypto.createHash("sha256").update(id).digest("hex"));
   res.setHeader("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${process.env.NODE_ENV === "production" ? "; Secure" : ""}`);
 }
 
@@ -256,16 +283,37 @@ async function collectCloudMessages() {
       name: cleanRelativePath(meta.name),
       size: Number(meta.size || chunks.reduce((n, c) => n + c.size, 0)),
       mimeType: String(meta.mime || "application/octet-stream"),
+      type: String(meta.mime || "application/octet-stream"),
       storage: "TELEGRAM",
       updatedAt: Number(meta.updatedAt || meta.createdAt || Date.now()),
+      modified: Number(meta.updatedAt || meta.createdAt || Date.now()),
+      sizeText: formatBytes(Number(meta.size || chunks.reduce((n, c) => n + c.size, 0))),
       uploadId: meta.id,
       chunks: chunks.map(c => c.messageId),
-      chunkCount: total
+      chunkCount: total,
+      hidden: Boolean(meta.hidden)
     });
   }
 
   files.sort((a, b) => String(a.name).localeCompare(String(b.name)));
   return files;
+}
+
+async function collectChunkMessagesForUpload(uploadId) {
+  const client = await getTelegramClient();
+  const chat = await getTelegramEntity();
+  const found = [];
+  for await (const message of client.iterMessages(chat, { search: FILE_MARKER, limit: 10000 })) {
+    const meta = decodeCaption(message?.text || message?.message || "");
+    if (!meta || meta.id !== uploadId || !isTelegramDocumentMessage(message)) continue;
+    found.push({
+      index: Number(meta.i),
+      messageId: Number(message.id),
+      size: messageFileSize(message),
+      meta
+    });
+  }
+  return found.sort((a, b) => a.index - b.index);
 }
 
 async function findFile(name) {
@@ -361,8 +409,10 @@ app.post("/api/auth/login", (req, res) => {
   loginAttempts.delete(ip);
   const token = createSession();
   const secure = process.env.NODE_ENV === "production";
-  res.setHeader("Set-Cookie", `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`);
-  res.json({ ok: true });
+  res.setHeader("Set-Cookie", `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 60 * 60}${secure ? "; Secure" : ""}`);
+  // Return the same signed token as a fallback for browsers/webviews that
+  // fail to persist HttpOnly cookies. The token contains no password.
+  res.json({ ok: true, token });
 });
 
 app.get("/api/auth/me", (req, res) => res.json({ authenticated: isAuthenticated(req) }));
@@ -385,7 +435,7 @@ app.get("/api/storage", requireAuth, async (req, res) => {
   try {
     const files = await collectCloudMessages();
     const used = files.reduce((sum, f) => sum + Number(f.size || 0), 0);
-    const limit = MAX_FILE_SIZE;
+    const limit = STORAGE_DISPLAY_BYTES;
     const percent = limit ? Math.min(100, Number(((used / limit) * 100).toFixed(2))) : 0;
     const remaining = Math.max(0, limit - used);
     res.json({
@@ -417,8 +467,20 @@ app.post("/api/upload-chunk", requireAuth, express.raw({ type: "application/octe
     if (!body.length) return res.status(400).json({ error: "Empty chunk" });
     if (body.length > CHUNK_SIZE) return res.status(413).json({ error: `Chunk too large. Maximum is ${formatBytes(CHUNK_SIZE)}.` });
 
-    const message = await withUploadLock(params.id, () => sendChunkToTelegram(body, params));
-    res.json({ ok: true, uploadId: params.id, index: params.index, messageId: Number(message.id), storage: "TELEGRAM" });
+    const message = await withUploadLock(params.id, async () => {
+      const existing = (await collectChunkMessagesForUpload(params.id)).find(c => c.index === params.index);
+      if (existing) return { id: existing.messageId, alreadyUploaded: true };
+
+      if (params.index === 0) {
+        const existingName = await findFile(params.name);
+        if (existingName && existingName.uploadId !== params.id) {
+          throw Object.assign(new Error("A file with that name already exists. Rename it first."), { statusCode: 409 });
+        }
+      }
+
+      return sendChunkToTelegram(body, params);
+    });
+    res.json({ ok: true, uploadId: params.id, index: params.index, messageId: Number(message.id), alreadyUploaded: Boolean(message.alreadyUploaded), storage: "TELEGRAM" });
   } catch (error) {
     console.error("TELEGRAM UPLOAD ERROR:", error);
     res.status(error.statusCode || 500).json({ error: error.message || "Telegram upload failed" });
@@ -469,6 +531,35 @@ async function streamTelegramDownload(file, res) {
   }
   res.end();
 }
+
+app.get(/^\/api\/file-chunk\/(.+)$/, requireAuth, async (req, res) => {
+  try {
+    const name = decodeURIComponent(req.params[0]);
+    const index = Number(req.query.index);
+    if (!Number.isInteger(index) || index < 0) return res.status(400).json({ error: "Invalid chunk index" });
+    const file = await findFile(name);
+    if (!file) return res.status(404).json({ error: "File not found" });
+    if (index >= file.chunks.length) return res.status(416).json({ error: "Chunk index out of range" });
+
+    const messages = await getMessagesByIds([file.chunks[index]]);
+    const message = messages[0];
+    if (!message) return res.status(404).json({ error: "Telegram chunk is missing" });
+
+    res.status(200);
+    res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+    res.setHeader("Content-Length", String(messageFileSize(message)));
+    res.setHeader("Cache-Control", "private, no-store");
+    for await (const chunk of (await getTelegramClient()).iterDownload(message)) {
+      if (res.destroyed) return;
+      if (!res.write(chunk)) await new Promise(resolve => res.once("drain", resolve));
+    }
+    res.end();
+  } catch (error) {
+    console.error("CHUNK DOWNLOAD ERROR:", error);
+    if (!res.headersSent) res.status(500).json({ error: error.message || "Chunk download failed" });
+    else res.destroy(error);
+  }
+});
 
 app.get(/^\/api\/stream\/(.+)$/, requireAuth, async (req, res) => {
   try {
@@ -527,6 +618,32 @@ app.put("/api/files", requireAuth, async (req, res) => {
   }
 });
 
+app.patch("/api/files/hide", requireAuth, async (req, res) => {
+  try {
+    const name = cleanRelativePath(req.body?.name || "");
+    const hidden = Boolean(req.body?.hidden);
+    if (!name) return res.status(400).json({ error: "File name missing" });
+    const file = await findFile(name);
+    if (!file) return res.status(404).json({ error: "File not found" });
+
+    const client = await getTelegramClient();
+    const chat = await getTelegramEntity();
+    const messages = await getMessagesByIds(file.chunks);
+    for (const message of messages) {
+      const oldMeta = decodeCaption(message.text || message.message || "");
+      if (!oldMeta) continue;
+      await client.editMessage(chat, {
+        message: message.id,
+        text: encodeCaption({ ...oldMeta, hidden, updatedAt: Date.now() })
+      });
+    }
+    res.json({ ok: true, name, hidden, storage: "TELEGRAM" });
+  } catch (error) {
+    console.error("HIDE ERROR:", error);
+    res.status(500).json({ error: error.message || "Hide operation failed" });
+  }
+});
+
 app.delete("/api/files", requireAuth, async (req, res) => {
   try {
     const name = cleanRelativePath(req.body?.name || "");
@@ -555,13 +672,13 @@ app.delete("/api/upload/:id", requireAuth, async (req, res) => {
   try {
     const id = String(req.params.id || "");
     if (!validUploadId(id)) return res.status(400).json({ error: "Invalid upload ID" });
-    const files = await collectCloudMessages();
-    const partial = files.find(f => f.uploadId === id);
-    if (partial) {
+    const partial = await collectChunkMessagesForUpload(id);
+    if (partial.length) {
       const client = await getTelegramClient();
       const chat = await getTelegramEntity();
-      for (let i = 0; i < partial.chunks.length; i += 100) {
-        await client.deleteMessages(chat, partial.chunks.slice(i, i + 100), { revoke: true });
+      const ids = partial.map(x => x.messageId);
+      for (let i = 0; i < ids.length; i += 100) {
+        await client.deleteMessages(chat, ids.slice(i, i + 100), { revoke: true });
       }
     }
     res.json({ ok: true });
