@@ -699,6 +699,13 @@ app.get("/api/health", async (req, res) => {
 
 /* ------------------------------- frontend -------------------------------- */
 
+// Serve the SPA explicitly at the root. This avoids relying on a catch-all
+// route for Vercel's root request.
+app.get("/", (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, "index.html"));
+});
+
+// SPA fallback for non-API browser routes.
 app.get("/{*splat}", (req, res, next) => {
   if (req.path.startsWith("/api/")) return next();
   res.sendFile(path.join(PUBLIC_DIR, "index.html"));
