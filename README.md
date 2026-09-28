@@ -1,23 +1,31 @@
-Cloud-Zen — Telegram Storage / Vercel
-This is the Vercel-targeted Telegram-only build.
-Project files
-index.html — single-file mobile-first website UI
-server.js — Express + Telegram MTProto backend
-package.json — dependencies and start script
-.env.example — required environment variable names
-Vercel environment variables
-Set these in Production:
+Cloud-Zen — Persistent Telegram Backend
+Architecture
+Vercel/static frontend -> one persistent Node.js backend -> one Telegram MTProto client -> Telegram storage chat.
+Do NOT run the Telegram MTProto backend as multiple Vercel serverless instances. The same TELEGRAM_SESSION must not be used concurrently by multiple backend processes.
+Files
+index.html — existing Cloud-Zen frontend.
+server.js — persistent Telegram backend.
+package.json — Node dependencies and start/check scripts.
+.env.example — required environment variable names.
+Environment
+Set these on the persistent backend:
 APP_PASSWORD
 DELETE_PASSWORD
 SESSION_SECRET
 TELEGRAM_API_ID
 TELEGRAM_API_HASH
 TELEGRAM_SESSION
-TELEGRAM_STORAGE_CHAT (for example me)
-TELEGRAM_WORKERS
+TELEGRAM_STORAGE_CHAT
+PORT (optional; default 3000)
 NODE_ENV=production
-CHUNK_SIZE is intentionally ignored. Browser and server use a fixed 4 MiB chunk so requests stay below Vercel's 4.5 MB function request-body limit.
-Storage behavior
-File chunks are stored as Telegram documents with Cloud-Zen metadata in their captions. The website rebuilds its file index from Telegram history, so completed data does not depend on Vercel's temporary filesystem.
-Important deployment note
-Do not put Telegram secrets in index.html or GitHub. After changing code, deploy a new Production deployment and test / and /api/health before uploading a large file.
+TELEGRAM_WORKERS (optional)
+CHUNK_SIZE (optional)
+Do not commit .env or real Telegram credentials.
+Run
+npm install
+npm run check
+npm start
+The backend exposes /api/health for Telegram connection status.
+Important
+Keep exactly one active backend process/replica using the Telegram session. If an old Vercel Telegram backend is still using the same session, stop it before starting this backend. If Telegram has already invalidated the session because of AUTH_KEY_DUPLICATED, generate/use a fresh valid session for the single persistent backend.
+The project is intended to keep storage in Telegram rather than B2, MEGA, IDrive E2, Cloudinary, Filebase, or Koofr.
