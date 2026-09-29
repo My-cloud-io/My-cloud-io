@@ -1,7 +1,17 @@
 {
-  "name": "cloud-zen-vercel-frontend",
+  "name": "cloud-zen-telegram-cloud",
   "version": "4.0.0",
   "private": true,
-  "description": "Cloud-Zen Vercel frontend with same-origin proxy to one persistent Telegram backend",
-  "engines": { "node": "24.x" }
+  "description": "Single-process Cloud-Zen website and persistent Telegram-backed file storage",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "healthcheck": "node --check server.js",
+    "telegram:session": "node telegram-session.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "express": "^5.1.0",
+    "teleproto": "1.229.0"
+  }
 }
