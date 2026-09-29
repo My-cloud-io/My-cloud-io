@@ -1,581 +1,621 @@
-'use strict';
+import express from "express";
+import cookieParser from "cookie-parser";
+import crypto from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { TelegramClient } from "teleproto";
+import { StringSession } from "teleproto/sessions";
+import { CustomFile } from "teleproto/client/uploads";
 
-/*
-  CLOUD-ZEN — Telegram-backed private cloud
-
-  IMPORTANT ARCHITECTURE RULE
-  ---------------------------
-  Run this backend as ONE persistent Node.js process/container.
-  NEVER run the same TELEGRAM_SESSION in two processes/instances.
-  Telegram can invalidate the authorization key and return AUTH_KEY_DUPLICATED.
-
-  This package intentionally keeps the project small:
-    server.js
-    telegram-session.js
-    package.json
-    admin.md
-    public/index.html
-*/
-
-const express = require('express');
-const crypto = require('node:crypto');
-const fs = require('node:fs');
-const fsp = require('node:fs/promises');
-const path = require('node:path');
-const os = require('node:os');
-const { TelegramClient } = require('teleproto');
-const { StringSession } = require('teleproto/sessions');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
-const APP_PASSWORD = String(process.env.APP_PASSWORD || '');
-const DELETE_PASSWORD = String(process.env.DELETE_PASSWORD || '');
-const SESSION_SECRET = String(process.env.SESSION_SECRET || '');
+const APP_PASSWORD = process.env.APP_PASSWORD || "";
+const DELETE_PASSWORD = process.env.DELETE_PASSWORD || "";
+const SESSION_SECRET = process.env.SESSION_SECRET || "";
 const API_ID = Number(process.env.TELEGRAM_API_ID || 0);
-const API_HASH = String(process.env.TELEGRAM_API_HASH || '');
-const TELEGRAM_SESSION = String(process.env.TELEGRAM_SESSION || '');
-const STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || 'me');
+const API_HASH = process.env.TELEGRAM_API_HASH || "";
+const TELEGRAM_SESSION = process.env.TELEGRAM_SESSION || "";
+const STORAGE_CHAT = process.env.TELEGRAM_STORAGE_CHAT || "me";
 const STORAGE_LIMIT = Number(process.env.STORAGE_LIMIT_BYTES || 10 * 1024 ** 3);
-
-// 4 MiB keeps browser/proxy requests small and predictable.
+const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 4_000_000_000);
 const CHUNK_SIZE = 4 * 1024 * 1024;
-const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 50 * 1024 ** 3);
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const SHARE_TTL_MS = 24 * 60 * 60 * 1000;
-const TEMP_DIR = path.join(os.tmpdir(), 'cloud-zen-upload');
-const PUBLIC_DIR = path.join(__dirname, 'public');
+const MAX_JSON_BODY = "6mb";
+const COOKIE_NAME = "cloudzen_session";
+const TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+const SHARE_TTL_MS = 1000 * 60 * 60 * 24;
+const PREFIX = "CZ1";
 
 if (!APP_PASSWORD || !DELETE_PASSWORD || !SESSION_SECRET) {
-  console.warn('[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET are required.');
+  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET should be configured.");
 }
 if (!API_ID || !API_HASH || !TELEGRAM_SESSION) {
-  console.warn('[Cloud-Zen] TELEGRAM_API_ID, TELEGRAM_API_HASH and TELEGRAM_SESSION are required.');
+  console.warn("[Cloud-Zen] Telegram credentials are not configured.");
 }
-fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const app = express();
-app.disable('x-powered-by');
-app.set('trust proxy', 1);
+app.disable("x-powered-by");
+app.use(express.json({ limit: MAX_JSON_BODY }));
+app.use(express.urlencoded({ extended: false, limit: "1mb" }));
+app.use(cookieParser());
+app.use(express.static(path.join(__dirname, "public"), { index: "index.html" }));
 
-// JSON only applies to JSON requests; upload chunks use application/octet-stream.
-app.use(express.json({ limit: '1mb' }));
+// One process = one Telegram client = one serialized operation queue.
+// This prevents concurrent use inside this process. It cannot make a serverless
+// deployment safe when multiple independent instances share one StringSession.
+let tgClient = null;
+let tgState = "not-configured";
+let tgError = null;
+let tgConnectPromise = null;
+let storageEntity = null;
+let fileIndex = new Map();
+let indexLoadedAt = 0;
 
-const text = v => String(v ?? '');
-const safeName = name => text(name || 'file').replace(/[\\/\0]/g, '_').trim().slice(0, 255) || 'file';
-const errText = err => text(err?.errorMessage || err?.message || err || 'Unknown error');
+let queue = Promise.resolve();
+function telegramTask(fn) {
+  const run = queue.then(fn, fn);
+  queue = run.catch(() => {});
+  return run;
+}
 
-function safeEqual(a, b) {
-  const aa = Buffer.from(text(a));
-  const bb = Buffer.from(text(b));
-  return aa.length === bb.length && crypto.timingSafeEqual(aa, bb);
+function b64urlEncode(text) {
+  return Buffer.from(String(text), "utf8").toString("base64url");
 }
-function hmac(value, secret = SESSION_SECRET) {
-  return crypto.createHmac('sha256', secret).update(value).digest('base64url');
+function b64urlDecode(text) {
+  return Buffer.from(String(text), "base64url").toString("utf8");
 }
-function makeSessionToken() {
-  const payload = Buffer.from(JSON.stringify({
-    v: 1,
-    exp: Date.now() + SESSION_TTL_MS,
-    nonce: crypto.randomBytes(16).toString('hex')
-  })).toString('base64url');
-  return `${payload}.${hmac(payload)}`;
+function safeName(name) {
+  const n = String(name || "unnamed").replace(/[\\/\0]/g, "_").trim();
+  return (n || "unnamed").slice(0, 255);
 }
-function validSessionToken(token) {
-  try {
-    const [payload, sig] = text(token).split('.');
-    if (!payload || !sig || !safeEqual(sig, hmac(payload))) return false;
-    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    return data?.v === 1 && Number(data.exp) > Date.now();
-  } catch { return false; }
+function jsonError(res, status, message, extra = {}) {
+  return res.status(status).json({ ok: false, error: message, ...extra });
 }
-function readSession(req) {
-  const auth = text(req.headers.authorization);
-  if (auth.startsWith('Bearer ')) return auth.slice(7).trim();
-  const match = text(req.headers.cookie).match(/(?:^|;\s*)cz_session=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : '';
+function sign(value) {
+  return crypto.createHmac("sha256", SESSION_SECRET).update(value).digest("base64url");
+}
+function makeToken() {
+  const body = `${Date.now()}.${crypto.randomBytes(18).toString("base64url")}`;
+  return `${body}.${sign(body)}`;
+}
+function makeShareToken(id, expiresAt) {
+  const body = `${id}.${expiresAt}`;
+  return `${expiresAt}.${sign(body)}`;
+}
+function verifyShareToken(id, token) {
+  if (!token || !SESSION_SECRET) return false;
+  const [expiresAt, sig] = String(token).split('.');
+  if (!/^\d+$/.test(expiresAt) || Number(expiresAt) < Date.now()) return false;
+  const expected = sign(`${id}.${expiresAt}`);
+  return sig && Buffer.byteLength(sig) === Buffer.byteLength(expected) && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+}
+function verifyToken(token) {
+  if (!token || !SESSION_SECRET) return false;
+  const parts = String(token).split(".");
+  if (parts.length !== 3) return false;
+  const [ts, nonce, sig] = parts;
+  const body = `${ts}.${nonce}`;
+  if (!/^\d+$/.test(ts)) return false;
+  if (Date.now() - Number(ts) > TOKEN_TTL_MS) return false;
+  const expected = sign(body);
+  return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+}
+function isAuthed(req) {
+  return verifyToken(req.cookies?.[COOKIE_NAME]);
 }
 function requireAuth(req, res, next) {
-  if (!validSessionToken(readSession(req))) return res.status(401).json({ error: 'AUTH_REQUIRED' });
+  if (!isAuthed(req)) return jsonError(res, 401, "AUTH_REQUIRED");
   next();
 }
-function setSession(res, token) {
-  res.setHeader('Set-Cookie', `cz_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
+function normalizeId(id) {
+  return String(id);
 }
-function clearSession(res) {
-  res.setHeader('Set-Cookie', 'cz_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0');
-}
-function newId() { return crypto.randomBytes(16).toString('hex'); }
-function bytesText(bytes) {
-  const n = Number(bytes) || 0;
-  if (n < 1024) return `${n} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)) - 1);
-  return `${(n / 1024 ** (i + 1)).toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
-}
-function disposition(name, attachment) {
-  const clean = safeName(name);
-  const ascii = clean.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
-  return `${attachment ? 'attachment' : 'inline'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(clean)}`;
+function parseCaption(text) {
+  const s = String(text || "");
+  if (!s.startsWith(PREFIX + "|")) return null;
+  const p = s.split("|");
+  if (p[1] === "C" && p.length >= 8) {
+    return {
+      type: "chunk",
+      fileId: p[2],
+      index: Number(p[3]),
+      total: Number(p[4]),
+      size: Number(p[5]),
+      mime: p[6] || "application/octet-stream",
+      name: (() => { try { return safeName(b64urlDecode(p.slice(7).join("|"))); } catch { return "unnamed"; } })()
+    };
+  }
+  if (p[1] === "R" && p.length >= 4) {
+    try { return { type: "rename", fileId: p[2], name: safeName(b64urlDecode(p.slice(3).join("|"))) }; } catch { return null; }
+  }
+  if (p[1] === "H" && p.length >= 4) return { type: "hide", fileId: p[2], hidden: p[3] === "1" };
+  if (p[1] === "D" && p.length >= 3) return { type: "deleted", fileId: p[2] };
+  return null;
 }
 
-/* ---------------- Telegram: ONE client, ONE queue ---------------- */
-const client = new TelegramClient(
-  new StringSession(TELEGRAM_SESSION),
-  API_ID,
-  API_HASH,
-  { connectionRetries: 5 }
-);
+function messageHasMedia(message) {
+  return Boolean(message?.media);
+}
+function messageFileInfo(message) {
+  const doc = message?.document || message?.media?.document;
+  const photo = message?.photo || message?.media?.photo;
+  if (doc) {
+    const attrs = Array.isArray(doc.attributes) ? doc.attributes : [];
+    const filenameAttr = attrs.find(a => a?.className === "DocumentAttributeFilename" || a?.fileName);
+    const name = filenameAttr?.fileName || message?.fileName || "document";
+    return {
+      name: safeName(name),
+      size: Number(doc.size || 0),
+      mime: doc.mimeType || "application/octet-stream"
+    };
+  }
+  if (photo) {
+    const sizes = Array.isArray(photo.sizes) ? photo.sizes : [];
+    const last = sizes[sizes.length - 1];
+    return {
+      name: `photo-${message.id}.jpg`,
+      size: Number(last?.size || 0),
+      mime: "image/jpeg"
+    };
+  }
+  return null;
+}
 
-let telegramReady = null;
-let telegramChat = null;
-let telegramAccount = null;
-let lastTelegramError = null;
-let indexCache = null;
-let indexPromise = null;
-let tgQueue = Promise.resolve();
+async function connectTelegram() {
+  if (tgClient && tgState === "ready") return tgClient;
+  if (tgConnectPromise) return tgConnectPromise;
+  if (!API_ID || !API_HASH || !TELEGRAM_SESSION) {
+    tgState = "not-configured";
+    throw new Error("Telegram environment variables are incomplete.");
+  }
 
-function tgRun(label, fn) {
-  const job = tgQueue.then(async () => {
+  tgConnectPromise = (async () => {
+    tgState = "connecting";
+    tgError = null;
+    const session = new StringSession(TELEGRAM_SESSION.trim());
+    const client = new TelegramClient(session, API_ID, API_HASH, {
+      connectionRetries: 5,
+      requestRetries: 3,
+      retryDelay: 1000,
+      autoReconnect: true
+    });
     try {
-      lastTelegramError = null;
-      return await fn();
+      await client.connect();
+      const authorized = await client.isUserAuthorized();
+      if (!authorized) throw new Error("TELEGRAM_SESSION is not authorized.");
+      storageEntity = await client.getInputEntity(STORAGE_CHAT);
+      tgClient = client;
+      tgState = "ready";
+      console.log("[Cloud-Zen] Telegram connected.");
+      return client;
     } catch (err) {
-      lastTelegramError = `${label}: ${errText(err)}`;
+      tgState = "error";
+      tgError = String(err?.message || err);
+      try { await client.disconnect(); } catch {}
+      tgClient = null;
+      throw err;
+    } finally {
+      tgConnectPromise = null;
+    }
+  })();
+  return tgConnectPromise;
+}
+
+async function withTelegram(fn) {
+  return telegramTask(async () => {
+    const client = await connectTelegram();
+    try {
+      return await fn(client);
+    } catch (err) {
+      const msg = String(err?.message || err);
+      if (/AUTH_KEY_DUPLICATED|AUTH_KEY_UNREGISTERED|SESSION_REVOKED|USER_DEACTIVATED/i.test(msg)) {
+        tgState = "session-invalid";
+        tgError = msg;
+      }
       throw err;
     }
   });
-  tgQueue = job.catch(() => {});
-  return job;
 }
 
-async function ensureTelegram() {
-  if (telegramReady) return telegramReady;
-  telegramReady = (async () => {
-    if (!API_ID || !API_HASH || !TELEGRAM_SESSION) throw new Error('TELEGRAM_ENV_MISSING');
-    await client.connect();
-    if (!(await client.isUserAuthorized())) throw new Error('TELEGRAM_SESSION_NOT_AUTHORIZED');
-    telegramAccount = await client.getMe();
-    telegramChat = await client.getInputEntity(STORAGE_CHAT);
-    console.log(`[Cloud-Zen] Telegram connected: ${telegramAccount?.username || telegramAccount?.firstName || telegramAccount?.id || 'account'}`);
-    console.log(`[Cloud-Zen] Storage chat: ${STORAGE_CHAT}`);
-    return true;
-  })().catch(err => {
-    telegramReady = null;
-    throw err;
-  });
-  return telegramReady;
-}
-
-function fileCaption(file) {
-  return `CZFILE3|${JSON.stringify({
-    id: file.id,
-    name: file.name,
-    size: file.size,
-    mime: file.mime,
-    chunks: file.chunks,
-    created: file.created
-  })}`;
-}
-function chunkCaption(id, index, total) { return `CZCHUNK3|${id}|${index}|${total}`; }
-function opCaption(op) { return `CZOP3|${JSON.stringify(op)}`; }
-function msgText(message) { return text(message?.message || message?.text); }
-
-function parseFile(message) {
-  const s = msgText(message);
-  if (!s.startsWith('CZFILE3|')) return null;
-  try {
-    const x = JSON.parse(s.slice(8));
-    if (!x?.id || !x?.name) return null;
-    return { ...x, messageId: Number(message.id), source: 'cloud-zen' };
-  } catch { return null; }
-}
-function parseChunk(message) {
-  const p = msgText(message).split('|');
-  if (p.length !== 4 || p[0] !== 'CZCHUNK3') return null;
-  return { id: p[1], index: Number(p[2]), total: Number(p[3]), messageId: Number(message.id) };
-}
-function parseOp(message) {
-  const s = msgText(message);
-  if (!s.startsWith('CZOP3|')) return null;
-  try { return JSON.parse(s.slice(6)); } catch { return null; }
-}
-
-// Detect older media already stored in the configured Telegram chat.
-function legacyMediaInfo(message) {
-  const media = message?.media;
-  if (!media) return null;
-  const doc = media?.document || media;
-  const attrs = Array.isArray(doc?.attributes) ? doc.attributes : [];
-  const filename = attrs.find(a => a?.className === 'DocumentAttributeFilename' || a?.constructor?.name === 'DocumentAttributeFilename');
-  const video = attrs.find(a => a?.className === 'DocumentAttributeVideo' || a?.constructor?.name === 'DocumentAttributeVideo');
-  const audio = attrs.find(a => a?.className === 'DocumentAttributeAudio' || a?.constructor?.name === 'DocumentAttributeAudio');
-  const name = filename?.fileName || filename?.filename || (video ? `video-${message.id}.mp4` : audio ? `audio-${message.id}.mp3` : `telegram-${message.id}`);
-  const size = Number(doc?.size || media?.size || message?.file?.size || 0);
-  const mime = text(doc?.mimeType || message?.file?.mime || (video ? 'video/mp4' : audio ? 'audio/mpeg' : 'application/octet-stream'));
-  if (!size) return null;
-  return { id: `legacy-${message.id}`, name: safeName(name), size, mime, created: Number(message.date || 0) * 1000, messageId: Number(message.id), source: 'legacy' };
-}
-
-/*
-  Telegram history is the durable index. No database is required.
-  indexRecords contains private Telegram message IDs; public API strips them.
-*/
-async function rebuildIndex(force = false) {
-  if (indexCache && !force) return indexCache;
-  if (indexPromise && !force) return indexPromise;
-
-  indexPromise = tgRun('scanIndex', async () => {
-    await ensureTelegram();
-    const files = new Map();
+async function rebuildIndex() {
+  return withTelegram(async (client) => {
     const chunks = new Map();
-    const ops = [];
-
-    for await (const message of client.iterMessages(telegramChat, { limit: undefined })) {
-      const f = parseFile(message);
-      if (f) { files.set(f.id, f); continue; }
-      const c = parseChunk(message);
-      if (c) { if (!chunks.has(c.id)) chunks.set(c.id, []); chunks.get(c.id).push(c); continue; }
-      const op = parseOp(message);
-      if (op?.id) { ops.push(op); continue; }
-
-      // Only show legacy media that is not one of our control messages.
-      const legacy = legacyMediaInfo(message);
-      if (legacy) files.set(legacy.id, legacy);
+    const legacy = new Map();
+    const control = [];
+    for await (const message of client.iterMessages(storageEntity, { limit: undefined })) {
+      const meta = parseCaption(message?.message);
+      if (meta?.type === "chunk") {
+        if (!chunks.has(meta.fileId)) chunks.set(meta.fileId, []);
+        chunks.get(meta.fileId).push({
+          messageId: Number(message.id),
+          index: meta.index,
+          total: meta.total,
+          size: meta.size,
+          mime: meta.mime,
+          name: meta.name
+        });
+      } else if (meta?.type === "rename" || meta?.type === "hide" || meta?.type === "deleted") {
+        control.push({ messageId: Number(message.id), ...meta });
+      } else if (messageHasMedia(message)) {
+        const info = messageFileInfo(message);
+        if (info) {
+          legacy.set(normalizeId(message.id), {
+            id: `tg-${message.id}`,
+            telegramMessageId: Number(message.id),
+            name: info.name,
+            size: info.size,
+            mime: info.mime,
+            hidden: false,
+            legacy: true,
+            total: 1,
+            chunks: [Number(message.id)],
+            updatedAt: Number(message.date || 0) * 1000
+          });
+        }
+      }
     }
 
+    const index = new Map();
     for (const [fileId, list] of chunks) {
-      const f = files.get(fileId);
-      if (f) f.chunkMessages = list.sort((a, b) => a.index - b.index);
+      list.sort((a, b) => a.index - b.index);
+      const first = list[0];
+      const complete = list.length === first.total && list.every((x, i) => x.index === i);
+      if (!complete) continue;
+      index.set(fileId, {
+        id: fileId,
+        name: first.name,
+        size: first.size,
+        mime: first.mime,
+        hidden: false,
+        legacy: false,
+        total: first.total,
+        chunks: list.map(x => x.messageId),
+        updatedAt: Date.now()
+      });
     }
-
-    for (const op of ops) {
-      const f = files.get(op.id);
-      if (!f) continue;
-      if (op.type === 'rename' && op.name) f.name = safeName(op.name);
-      if (op.type === 'hide') f.hidden = !!op.hidden;
-      if (op.type === 'delete') f.deleted = true;
+    for (const c of control.sort((a, b) => a.messageId - b.messageId)) {
+      const item = index.get(c.fileId);
+      if (!item) continue;
+      if (c.type === "rename") item.name = c.name;
+      if (c.type === "hide") item.hidden = c.hidden;
+      if (c.type === "deleted") index.delete(c.fileId);
     }
+    for (const item of legacy.values()) index.set(item.id, item);
 
-    const records = [...files.values()].filter(f => !f.deleted).map(f => ({
-      id: f.id,
-      name: f.name,
-      size: Number(f.size || 0),
-      mime: f.mime || 'application/octet-stream',
-      created: f.created || 0,
-      source: f.source || 'cloud-zen',
-      hidden: !!f.hidden,
-      complete: f.source === 'legacy' || (Array.isArray(f.chunkMessages) && f.chunkMessages.length === Number(f.chunks)) || f.source === 'cloud-zen'
-    }));
-
-    indexCache = { records, internal: files };
-    return indexCache;
-  }).finally(() => { indexPromise = null; });
-
-  return indexPromise;
-}
-function invalidateIndex() { indexCache = null; }
-
-async function getInternalFile(fileId) {
-  const index = await rebuildIndex();
-  return index.internal.get(fileId) || null;
+    fileIndex = index;
+    indexLoadedAt = Date.now();
+    return Array.from(index.values());
+  });
 }
 
-function publicFile(file) {
+async function getIndex(force = false) {
+  if (!force && indexLoadedAt && Date.now() - indexLoadedAt < 30_000) return Array.from(fileIndex.values());
+  return rebuildIndex();
+}
+
+function publicFile(item) {
   return {
-    id: file.id,
-    name: file.name,
-    size: Number(file.size || 0),
-    mime: file.mime || 'application/octet-stream',
-    created: file.created || 0,
-    source: file.source || 'cloud-zen',
-    hidden: !!file.hidden,
-    complete: !!file.complete
+    id: item.id,
+    name: item.name,
+    size: item.size,
+    mime: item.mime,
+    hidden: Boolean(item.hidden),
+    legacy: Boolean(item.legacy),
+    total: item.total,
+    updatedAt: item.updatedAt,
+    openUrl: `/api/files/${encodeURIComponent(item.id)}/open`,
+    downloadUrl: `/api/files/${encodeURIComponent(item.id)}/download`
   };
 }
 
-/* ---------------- Auth ---------------- */
-app.post('/api/auth/login', (req, res) => {
-  const password = text(req.body?.password);
-  if (!APP_PASSWORD || !safeEqual(password, APP_PASSWORD)) return res.status(401).json({ error: 'INVALID_PASSWORD' });
-  const token = makeSessionToken();
-  setSession(res, token);
+async function findFile(id) {
+  const list = await getIndex(false);
+  return list.find(x => x.id === id) || null;
+}
+
+async function sendControl(text) {
+  return withTelegram(client => client.sendMessage(storageEntity, { message: text }));
+}
+
+async function deleteTelegramMessages(ids) {
+  const unique = [...new Set(ids.map(Number).filter(Number.isFinite))];
+  for (let i = 0; i < unique.length; i += 100) {
+    await withTelegram(client => client.deleteMessages(storageEntity, unique.slice(i, i + 100)));
+  }
+}
+
+function isRangeRequest(req) {
+  return typeof req.headers.range === "string" && req.headers.range.startsWith("bytes=");
+}
+
+async function streamTelegramMessage(res, message, contentType, downloadName, req, totalSize) {
+  const client = await connectTelegram();
+  res.setHeader("Content-Type", contentType || "application/octet-stream");
+  res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(downloadName)}`);
+  if (!isRangeRequest(req)) {
+    res.setHeader("Content-Length", String(totalSize));
+  }
+  for await (const chunk of client.iterDownload(message, { requestSize: 512 * 1024 })) {
+    if (!res.write(chunk)) await new Promise(resolve => res.once("drain", resolve));
+  }
+  res.end();
+}
+
+app.get("/api/health", async (req, res) => {
+  let telegram = tgState === "ready";
+  let error = tgError;
+  if (!telegram && API_ID && API_HASH && TELEGRAM_SESSION) {
+    try { await connectTelegram(); telegram = true; error = null; } catch (e) { error = String(e?.message || e); }
+  }
+  res.json({
+    ok: true,
+    service: "cloud-zen-telegram-backend",
+    persistent: true,
+    telegram,
+    telegramState: tgState,
+    error: error || undefined,
+    storageChatConfigured: Boolean(STORAGE_CHAT)
+  });
+});
+
+app.post("/api/auth/login", (req, res) => {
+  if (!APP_PASSWORD) return jsonError(res, 503, "APP_PASSWORD_NOT_CONFIGURED");
+  if (String(req.body?.password || "") !== APP_PASSWORD) return jsonError(res, 401, "INVALID_PASSWORD");
+  const token = makeToken();
+  res.cookie(COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: TOKEN_TTL_MS,
+    path: "/"
+  });
   res.json({ ok: true });
 });
-app.get('/api/auth/me', (req, res) => res.json({ authenticated: validSessionToken(readSession(req)) }));
-app.post('/api/auth/logout', (_req, res) => { clearSession(res); res.json({ ok: true }); });
+app.get("/api/auth/me", (req, res) => res.json({ ok: isAuthed(req) }));
+app.post("/api/auth/logout", (req, res) => {
+  res.clearCookie(COOKIE_NAME, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/" });
+  res.json({ ok: true });
+});
 
-/* ---------------- Health ---------------- */
-app.get('/api/health', async (_req, res) => {
+app.get("/api/files", requireAuth, async (req, res) => {
   try {
-    await tgRun('health', ensureTelegram);
-    res.json({
-      ok: true,
-      service: 'cloud-zen-telegram-backend',
-      telegram: true,
-      account: telegramAccount?.username || telegramAccount?.firstName || telegramAccount?.id || null,
-      storageChat: STORAGE_CHAT,
-      singleProcessClient: true,
-      chunkSize: CHUNK_SIZE,
-      lastTelegramError
-    });
-  } catch (err) {
-    res.status(503).json({ ok: false, telegram: false, error: errText(err), lastTelegramError });
+    const includeHidden = String(req.query.includeHidden || "") === "1";
+    const items = (await getIndex(false)).filter(x => includeHidden || !x.hidden);
+    const q = String(req.query.q || "").trim().toLowerCase();
+    const filtered = q ? items.filter(x => x.name.toLowerCase().includes(q)) : items;
+    res.json({ ok: true, files: filtered.map(publicFile) });
+  } catch (e) {
+    console.error("[Cloud-Zen] FILE LIST:", e);
+    jsonError(res, 503, "TELEGRAM_UNAVAILABLE", { detail: String(e?.message || e) });
   }
 });
 
-/* ---------------- Files / storage ---------------- */
-app.get('/api/files', requireAuth, async (req, res) => {
+app.get("/api/storage", requireAuth, async (req, res) => {
   try {
-    const q = text(req.query.q).trim().toLowerCase();
-    const showHidden = text(req.query.hidden) === 'true';
-    const index = await rebuildIndex();
-    const result = index.records
-      .filter(f => showHidden ? f.hidden : !f.hidden)
-      .filter(f => !q || f.name.toLowerCase().includes(q))
-      .map(publicFile);
-    res.json({ files: result, count: result.length });
-  } catch (err) {
-    console.error('[Cloud-Zen] FILE LIST:', errText(err));
-    res.status(503).json({ error: 'TELEGRAM_UNAVAILABLE', detail: errText(err) });
+    const items = await getIndex(false);
+    const used = items.filter(x => !x.hidden).reduce((sum, x) => sum + Number(x.size || 0), 0);
+    res.json({ ok: true, used, limit: STORAGE_LIMIT, free: Math.max(0, STORAGE_LIMIT - used), count: items.filter(x => !x.hidden).length });
+  } catch (e) {
+    console.error("[Cloud-Zen] STORAGE:", e);
+    jsonError(res, 503, "TELEGRAM_UNAVAILABLE", { detail: String(e?.message || e) });
   }
 });
 
-app.get('/api/storage', requireAuth, async (_req, res) => {
-  try {
-    const index = await rebuildIndex();
-    const visible = index.records.filter(f => !f.hidden);
-    const usedBytes = visible.reduce((sum, f) => sum + Number(f.size || 0), 0);
-    const remainingBytes = Math.max(0, STORAGE_LIMIT - usedBytes);
-    const usedPercent = STORAGE_LIMIT ? Math.min(100, Number(((usedBytes / STORAGE_LIMIT) * 100).toFixed(2))) : 0;
-    res.json({
-      usedBytes,
-      remainingBytes,
-      limitBytes: STORAGE_LIMIT,
-      files: visible.length,
-      hiddenFiles: index.records.filter(f => f.hidden).length,
-      usedText: bytesText(usedBytes),
-      remainingText: bytesText(remainingBytes),
-      limitText: bytesText(STORAGE_LIMIT),
-      usedPercent,
-      telegram: true
-    });
-  } catch (err) {
-    res.status(503).json({ error: 'TELEGRAM_UNAVAILABLE', detail: errText(err) });
-  }
-});
-
-/* ---------------- Upload ---------------- */
-app.post('/api/upload-chunk', requireAuth, express.raw({ type: '*/*', limit: '4.5mb' }), async (req, res) => {
-  try {
-    const fileId = text(req.headers['x-file-id']);
-    const index = Number(req.headers['x-chunk-index']);
-    const total = Number(req.headers['x-total-chunks']);
-    const name = safeName(req.headers['x-file-name']);
-    const size = Number(req.headers['x-file-size']);
-    const mime = text(req.headers['x-file-mime'] || 'application/octet-stream').slice(0, 180);
-    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-
-    if (!fileId || !Number.isInteger(index) || !Number.isInteger(total) || index < 0 || index >= total || total < 1) {
-      return res.status(400).json({ error: 'INVALID_UPLOAD_HEADERS' });
-    }
-    if (!Number.isFinite(size) || size < 0 || size > MAX_FILE_SIZE) return res.status(413).json({ error: 'FILE_TOO_LARGE' });
-    if (size > STORAGE_LIMIT) return res.status(413).json({ error: 'FILE_EXCEEDS_CLOUD_LIMIT' });
-    if (body.length > CHUNK_SIZE + 64 * 1024) return res.status(413).json({ error: 'CHUNK_TOO_LARGE' });
-
-    await tgRun(`upload:${fileId}:${index}`, async () => {
-      await ensureTelegram();
-      const temp = path.join(TEMP_DIR, `${fileId}-${index}-${crypto.randomBytes(8).toString('hex')}.bin`);
-      await fsp.writeFile(temp, body);
-      try {
-        await client.sendFile(telegramChat, {
-          file: temp,
-          caption: chunkCaption(fileId, index, total),
-          forceDocument: true
-        });
-        if (index === 0) {
-          await client.sendMessage(telegramChat, {
-            message: fileCaption({ id: fileId, name, size, mime, chunks: total, created: Date.now() })
-          });
-        }
-      } finally {
-        await fsp.rm(temp, { force: true }).catch(() => {});
-      }
-    });
-
-    invalidateIndex();
-    res.json({ ok: true, id: fileId, index, total, percent: Math.floor(((index + 1) / total) * 100) });
-  } catch (err) {
-    console.error('[Cloud-Zen] UPLOAD:', errText(err));
-    res.status(503).json({ error: 'TELEGRAM_UPLOAD_FAILED', detail: errText(err) });
-  }
-});
-
-/* ---------------- Telegram download / preview ---------------- */
-async function sendTelegramContent(res, file, attachment) {
-  res.setHeader('Content-Type', file.mime || 'application/octet-stream');
-  if (file.size) res.setHeader('Content-Length', String(file.size));
-  res.setHeader('Content-Disposition', disposition(file.name, attachment));
-  res.setHeader('Cache-Control', 'private, no-store');
-
-  if (file.source === 'legacy') {
-    await tgRun(`download:${file.id}`, async () => {
-      const messages = await client.getMessages(telegramChat, { ids: [file.messageId] });
-      const message = messages?.[0];
-      if (!message) throw new Error('MISSING_TELEGRAM_MESSAGE');
-      for await (const buf of client.iterDownload(message)) {
-        if (res.destroyed) break;
-        if (!res.write(buf)) await new Promise(resolve => res.once('drain', resolve));
-      }
-    });
-  } else {
-    const parts = [...(file.chunkMessages || [])].sort((a, b) => a.index - b.index);
-    if (parts.length !== Number(file.chunks)) throw new Error('FILE_INCOMPLETE');
-    for (const part of parts) {
-      await tgRun(`download:${file.id}:${part.index}`, async () => {
-        const messages = await client.getMessages(telegramChat, { ids: [part.messageId] });
-        const message = messages?.[0];
-        if (!message) throw new Error(`MISSING_TELEGRAM_CHUNK:${part.index}`);
-        for await (const buf of client.iterDownload(message)) {
-          if (res.destroyed) return;
-          if (!res.write(buf)) await new Promise(resolve => res.once('drain', resolve));
-        }
-      });
-    }
-  }
-  if (!res.destroyed) res.end();
-}
-
-app.get('/api/files/:id/content', requireAuth, async (req, res) => {
-  try {
-    const file = await getInternalFile(text(req.params.id));
-    if (!file || file.deleted || file.hidden) return res.status(404).json({ error: 'FILE_NOT_FOUND' });
-    await sendTelegramContent(res, file, text(req.query.download) === '1');
-  } catch (err) {
-    console.error('[Cloud-Zen] DOWNLOAD:', errText(err));
-    if (!res.headersSent) res.status(503).json({ error: 'TELEGRAM_DOWNLOAD_FAILED', detail: errText(err) });
-    else res.destroy();
-  }
-});
-
-/* ---------------- Share links ---------------- */
-function makeShareToken(fileId) {
-  const payload = Buffer.from(JSON.stringify({ v: 1, id: fileId, exp: Date.now() + SHARE_TTL_MS })).toString('base64url');
-  return `${payload}.${hmac(payload)}`;
-}
-function readShareToken(token) {
-  try {
-    const [payload, sig] = text(token).split('.');
-    if (!payload || !sig || !safeEqual(sig, hmac(payload))) return null;
-    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    if (data?.v !== 1 || Number(data.exp) <= Date.now() || !data.id) return null;
-    return data;
-  } catch { return null; }
-}
-app.post('/api/files/:id/share', requireAuth, async (req, res) => {
-  const fileId = text(req.params.id);
-  try {
-    const file = await getInternalFile(fileId);
-    if (!file || file.deleted || file.hidden) return res.status(404).json({ error: 'FILE_NOT_FOUND' });
-    const token = makeShareToken(fileId);
-    const base = `${req.protocol}://${req.get('host')}`;
-    res.json({ ok: true, expiresAt: Date.now() + SHARE_TTL_MS, url: `${base}/share/${encodeURIComponent(token)}` });
-  } catch (err) {
-    res.status(503).json({ error: 'SHARE_FAILED', detail: errText(err) });
-  }
-});
-app.get('/share/:token', async (req, res) => {
-  const share = readShareToken(text(req.params.token));
-  if (!share) return res.status(404).send('Share link expired or invalid.');
-  try {
-    const file = await getInternalFile(share.id);
-    if (!file || file.deleted || file.hidden) return res.status(404).send('File not found.');
-    await sendTelegramContent(res, file, false);
-  } catch (err) {
-    console.error('[Cloud-Zen] SHARE DOWNLOAD:', errText(err));
-    if (!res.headersSent) res.status(503).send('Telegram is temporarily unavailable.');
-    else res.destroy();
-  }
-});
-
-/* ---------------- Rename / hide / delete ---------------- */
-app.post('/api/files/:id/rename', requireAuth, async (req, res) => {
-  const fileId = text(req.params.id);
+app.post("/api/upload-start", requireAuth, async (req, res) => {
   const name = safeName(req.body?.name);
-  if (!name) return res.status(400).json({ error: 'INVALID_NAME' });
+  const size = Number(req.body?.size);
+  const mime = String(req.body?.mime || "application/octet-stream").slice(0, 200);
+  if (!name || !Number.isSafeInteger(size) || size <= 0) return jsonError(res, 400, "INVALID_FILE");
+  if (size > MAX_FILE_SIZE) return jsonError(res, 413, "FILE_TOO_LARGE");
+  const total = Math.ceil(size / CHUNK_SIZE);
+  const fileId = crypto.randomBytes(16).toString("hex");
+  res.json({ ok: true, fileId, chunkSize: CHUNK_SIZE, total, name, size, mime });
+});
+
+app.post("/api/upload-chunk", requireAuth, async (req, res) => {
+  const fileId = String(req.query.fileId || req.body?.fileId || "");
+  const index = Number(req.query.index ?? req.body?.index);
+  const total = Number(req.query.total ?? req.body?.total);
+  const size = Number(req.query.size ?? req.body?.size);
+  const mime = String(req.query.mime || req.body?.mime || "application/octet-stream").slice(0, 200);
+  const name = safeName(req.query.name || req.body?.name);
+  const raw = req.body?.data;
+  if (!/^[a-f0-9]{32}$/.test(fileId) || !Number.isInteger(index) || !Number.isInteger(total) || index < 0 || index >= total || !Number.isInteger(size) || size <= 0 || !name || !raw) {
+    return jsonError(res, 400, "INVALID_CHUNK");
+  }
+  const buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw), "base64");
+  const expected = index === total - 1 ? size - CHUNK_SIZE * (total - 1) : CHUNK_SIZE;
+  if (buffer.length !== expected || buffer.length <= 0 || buffer.length > CHUNK_SIZE) return jsonError(res, 400, "CHUNK_SIZE_MISMATCH");
+
   try {
-    const file = await getInternalFile(fileId);
-    if (!file || file.deleted) return res.status(404).json({ error: 'FILE_NOT_FOUND' });
-    await tgRun('rename', async () => {
-      await ensureTelegram();
-      await client.sendMessage(telegramChat, { message: opCaption({ id: fileId, type: 'rename', name, at: Date.now() }) });
-    });
-    invalidateIndex();
-    res.json({ ok: true, id: fileId, name });
-  } catch (err) {
-    res.status(503).json({ error: 'TELEGRAM_RENAME_FAILED', detail: errText(err) });
+    const caption = `${PREFIX}|C|${fileId}|${index}|${total}|${size}|${mime}|${b64urlEncode(name)}`;
+    const message = await withTelegram(client => client.sendFile(storageEntity, {
+      file: new CustomFile(`chunk-${fileId}-${index}.bin`, buffer.length, "", buffer),
+      caption,
+      forceDocument: true,
+      workers: 1,
+      silent: true
+    }));
+    fileIndex.delete(fileId);
+    indexLoadedAt = 0;
+    res.json({ ok: true, fileId, index, messageId: Number(message.id), received: buffer.length });
+  } catch (e) {
+    console.error("[Cloud-Zen] UPLOAD:", e);
+    jsonError(res, 503, "TELEGRAM_UPLOAD_FAILED", { detail: String(e?.message || e) });
   }
 });
 
-app.post('/api/files/:id/hide', requireAuth, async (req, res) => {
-  const fileId = text(req.params.id);
-  const hidden = Boolean(req.body?.hidden);
+app.post("/api/upload-finish", requireAuth, async (req, res) => {
+  const fileId = String(req.body?.fileId || "");
+  if (!/^[a-f0-9]{32}$/.test(fileId)) return jsonError(res, 400, "INVALID_FILE_ID");
   try {
-    const file = await getInternalFile(fileId);
-    if (!file || file.deleted) return res.status(404).json({ error: 'FILE_NOT_FOUND' });
-    await tgRun('hide', async () => {
-      await ensureTelegram();
-      await client.sendMessage(telegramChat, { message: opCaption({ id: fileId, type: 'hide', hidden, at: Date.now() }) });
-    });
-    invalidateIndex();
-    res.json({ ok: true, id: fileId, hidden });
-  } catch (err) {
-    res.status(503).json({ error: 'TELEGRAM_HIDE_FAILED', detail: errText(err) });
+    const item = await findFile(fileId);
+    if (!item || item.legacy) return jsonError(res, 409, "UPLOAD_INCOMPLETE");
+    res.json({ ok: true, file: publicFile(item) });
+  } catch (e) {
+    jsonError(res, 503, "TELEGRAM_UNAVAILABLE", { detail: String(e?.message || e) });
   }
 });
 
-app.delete('/api/files/:id', requireAuth, async (req, res) => {
-  const fileId = text(req.params.id);
-  const password = text(req.body?.password || req.headers['x-delete-password']);
-  if (!DELETE_PASSWORD || !safeEqual(password, DELETE_PASSWORD)) return res.status(403).json({ error: 'DELETE_PASSWORD_REQUIRED' });
-
-  try {
-    const file = await getInternalFile(fileId);
-    if (!file || file.deleted) return res.status(404).json({ error: 'FILE_NOT_FOUND' });
-    await tgRun('delete', async () => {
-      await ensureTelegram();
-      const ids = file.source === 'legacy'
-        ? [file.messageId]
-        : [file.messageId, ...(file.chunkMessages || []).map(x => x.messageId)].filter(Boolean);
-      for (let i = 0; i < ids.length; i += 100) {
-        await client.deleteMessages(telegramChat, ids.slice(i, i + 100), { revoke: true });
-      }
-      // Durable tombstone protects against a partial deletion or an old cache.
-      await client.sendMessage(telegramChat, { message: opCaption({ id: fileId, type: 'delete', at: Date.now() }) });
-    });
-    invalidateIndex();
-    res.json({ ok: true, id: fileId });
-  } catch (err) {
-    res.status(503).json({ error: 'TELEGRAM_DELETE_FAILED', detail: errText(err) });
-  }
-});
-
-/* ---------------- Root / static UI ---------------- */
-app.get('/', (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
-app.use(express.static(PUBLIC_DIR, { index: false, maxAge: '1h' }));
-app.use((_req, res) => res.status(404).json({ error: 'NOT_FOUND' }));
-
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[Cloud-Zen] listening on 0.0.0.0:${PORT}`);
-});
-server.on('error', err => console.error('[Cloud-Zen] HTTP ERROR:', errText(err)));
-
-// Connect once at startup. If Telegram is temporarily unreachable, requests will retry via ensureTelegram.
-ensureTelegram().catch(err => console.error('[Cloud-Zen] Telegram startup:', errText(err)));
-
-async function shutdown(signal) {
-  console.log(`[Cloud-Zen] ${signal}: shutdown`);
-  try { await tgRun('disconnect', () => client.disconnect()); } catch {}
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 8000).unref();
+async function loadMessages(ids) {
+  return withTelegram(client => client.getMessages(storageEntity, { ids }));
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+
+app.get("/api/files/:id/open", requireAuth, async (req, res) => {
+  try {
+    const item = await findFile(req.params.id);
+    if (!item || item.hidden) return jsonError(res, 404, "NOT_FOUND");
+    const ids = item.chunks;
+    if (item.legacy) {
+      const [message] = await loadMessages(ids);
+      if (!message) return jsonError(res, 404, "TELEGRAM_MESSAGE_NOT_FOUND");
+      await streamTelegramMessage(res, message, item.mime, item.name, req, item.size);
+      return;
+    }
+    if (item.mime?.startsWith("image/") || item.mime?.startsWith("video/") || item.mime?.startsWith("audio/") || item.mime === "application/pdf" || item.mime?.startsWith("text/")) {
+      res.setHeader("Content-Type", item.mime);
+    } else {
+      res.setHeader("Content-Type", "application/octet-stream");
+    }
+    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(item.name)}`);
+    let sent = 0;
+    for (const id of ids) {
+      const [message] = await loadMessages([id]);
+      if (!message) return;
+      for await (const chunk of (await connectTelegram()).iterDownload(message, { requestSize: 512 * 1024 })) {
+        sent += chunk.length;
+        if (!res.write(chunk)) await new Promise(resolve => res.once("drain", resolve));
+      }
+    }
+    res.end();
+  } catch (e) {
+    if (!res.headersSent) jsonError(res, 503, "TELEGRAM_DOWNLOAD_FAILED", { detail: String(e?.message || e) });
+    else res.end();
+  }
+});
+
+app.get("/api/files/:id/download", requireAuth, async (req, res) => {
+  try {
+    const item = await findFile(req.params.id);
+    if (!item || item.hidden) return jsonError(res, 404, "NOT_FOUND");
+    res.setHeader("Content-Type", item.mime || "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(item.name)}`);
+    if (item.legacy) {
+      const [message] = await loadMessages(item.chunks);
+      if (!message) return jsonError(res, 404, "TELEGRAM_MESSAGE_NOT_FOUND");
+      await streamTelegramMessage(res, message, item.mime, item.name, req, item.size);
+      return;
+    }
+    for (const id of item.chunks) {
+      const [message] = await loadMessages([id]);
+      if (!message) throw new Error(`Missing Telegram chunk ${id}`);
+      for await (const chunk of (await connectTelegram()).iterDownload(message, { requestSize: 512 * 1024 })) {
+        if (!res.write(chunk)) await new Promise(resolve => res.once("drain", resolve));
+      }
+    }
+    res.end();
+  } catch (e) {
+    if (!res.headersSent) jsonError(res, 503, "TELEGRAM_DOWNLOAD_FAILED", { detail: String(e?.message || e) });
+    else res.end();
+  }
+});
+
+app.post("/api/files/:id/rename", requireAuth, async (req, res) => {
+  const name = safeName(req.body?.name);
+  if (!name) return jsonError(res, 400, "INVALID_NAME");
+  try {
+    const item = await findFile(req.params.id);
+    if (!item || item.legacy) return jsonError(res, 404, "NOT_FOUND");
+    await sendControl(`${PREFIX}|R|${item.id}|${b64urlEncode(name)}`);
+    indexLoadedAt = 0;
+    res.json({ ok: true, name });
+  } catch (e) {
+    jsonError(res, 503, "RENAME_FAILED", { detail: String(e?.message || e) });
+  }
+});
+
+app.post("/api/files/:id/hide", requireAuth, async (req, res) => {
+  try {
+    const item = await findFile(req.params.id);
+    if (!item) return jsonError(res, 404, "NOT_FOUND");
+    const hidden = Boolean(req.body?.hidden);
+    await sendControl(`${PREFIX}|H|${item.id}|${hidden ? 1 : 0}`);
+    indexLoadedAt = 0;
+    res.json({ ok: true, hidden });
+  } catch (e) {
+    jsonError(res, 503, "HIDE_FAILED", { detail: String(e?.message || e) });
+  }
+});
+
+app.post("/api/files/:id/delete", requireAuth, async (req, res) => {
+  if (!DELETE_PASSWORD || String(req.body?.password || "") !== DELETE_PASSWORD) return jsonError(res, 403, "DELETE_PASSWORD_REQUIRED");
+  try {
+    const item = await findFile(req.params.id);
+    if (!item) return jsonError(res, 404, "NOT_FOUND");
+    if (item.legacy) {
+      await deleteTelegramMessages(item.chunks);
+    } else {
+      await deleteTelegramMessages(item.chunks);
+      await sendControl(`${PREFIX}|D|${item.id}`);
+    }
+    fileIndex.delete(item.id);
+    indexLoadedAt = 0;
+    res.json({ ok: true });
+  } catch (e) {
+    jsonError(res, 503, "DELETE_FAILED", { detail: String(e?.message || e) });
+  }
+});
+
+app.get("/api/files/:id/share", requireAuth, async (req, res) => {
+  try {
+    const item = await findFile(req.params.id);
+    if (!item || item.hidden) return jsonError(res, 404, "NOT_FOUND");
+    const expiresAt = Date.now() + SHARE_TTL_MS;
+    const token = makeShareToken(item.id, expiresAt);
+    res.json({ ok: true, expiresAt, url: `/api/share/${encodeURIComponent(item.id)}?token=${encodeURIComponent(token)}` });
+  } catch (e) {
+    jsonError(res, 500, "SHARE_FAILED");
+  }
+});
+
+app.get("/api/share/:id", async (req, res) => {
+  try {
+    if (!verifyShareToken(req.params.id, req.query.token)) return jsonError(res, 403, "INVALID_OR_EXPIRED_SHARE");
+    const item = await findFile(req.params.id);
+    if (!item || item.hidden) return jsonError(res, 404, "NOT_FOUND");
+    res.setHeader("Content-Type", item.mime || "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(item.name)}`);
+    if (item.legacy) {
+      const [message] = await loadMessages(item.chunks);
+      if (!message) return jsonError(res, 404, "TELEGRAM_MESSAGE_NOT_FOUND");
+      await streamTelegramMessage(res, message, item.mime, item.name, req, item.size);
+      return;
+    }
+    const client = await connectTelegram();
+    for (const id of item.chunks) {
+      const [message] = await loadMessages([id]);
+      if (!message) throw new Error(`Missing Telegram chunk ${id}`);
+      for await (const chunk of client.iterDownload(message, { requestSize: 512 * 1024 })) {
+        if (!res.write(chunk)) await new Promise(resolve => res.once("drain", resolve));
+      }
+    }
+    res.end();
+  } catch (e) {
+    if (!res.headersSent) jsonError(res, 503, "TELEGRAM_SHARE_FAILED", { detail: String(e?.message || e) });
+    else res.end();
+  }
+});
+
+app.use((err, req, res, next) => {
+  console.error("[Cloud-Zen] HTTP:", err);
+  if (res.headersSent) return next(err);
+  jsonError(res, 500, "INTERNAL_ERROR");
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`[Cloud-Zen] listening on 0.0.0.0:${PORT}`);
+  if (process.env.VERCEL) {
+    console.warn("[Cloud-Zen] This backend requires one persistent process. Do not deploy the Telegram session to multiple Vercel Functions.");
+  }
+});
