@@ -35,6 +35,10 @@ app.set("trust proxy", 1);
 app.disable("x-powered-by");
 app.use(cookieParser());
 app.use(express.json({ limit: "256kb" }));
+app.use("/api", (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
 
 function fail(message, status = 400) {
   const err = new Error(message);
@@ -46,8 +50,22 @@ function env(name, fallback = "") {
   return String(process.env[name] ?? fallback).trim();
 }
 
-const APP_PASSWORD = env("APP_PASSWORD");
-const DELETE_PASSWORD = env("DELETE_PASSWORD");
+// Keep passwords exactly as entered in Vercel. Do not trim them: a password may
+// intentionally contain leading/trailing spaces.
+function readSecret(name) {
+  // Never trim secrets: spaces can legitimately be part of a password/session.
+  return typeof process.env[name] === "string" ? process.env[name] : "";
+}
+
+function getAppPassword() {
+  return readSecret("APP_PASSWORD");
+}
+
+function getDeletePassword() {
+  return readSecret("DELETE_PASSWORD");
+}
+
+const DELETE_PASSWORD = getDeletePassword();
 const API_ID = Number(env("TELEGRAM_API_ID", "0"));
 const API_HASH = env("TELEGRAM_API_HASH");
 const TELEGRAM_SESSION = env("TELEGRAM_SESSION");
@@ -67,11 +85,16 @@ const MAX_FILE_BYTES = CHUNK_SIZE * MAX_CHUNKS;
  * already-configured deployment working while preserving stable signatures.
  */
 function getSessionKey() {
-  const supplied = env("SESSION_SECRET");
-  if (!supplied) {
-    fail("SESSION_SECRET is not configured", 500);
+  // SESSION_SECRET is preferred. For deployments where only APP_PASSWORD was
+  // configured (a common Preview-environment mistake), derive a stable key
+  // from the password instead of making login fail with a generic 500.
+  const supplied = readSecret("SESSION_SECRET");
+  const appPassword = getAppPassword();
+  const source = supplied || (appPassword ? `cloud-session:${appPassword}` : "");
+  if (!source) {
+    fail("APP_PASSWORD is not configured for this deployment environment", 503);
   }
-  return crypto.createHash("sha256").update(supplied, "utf8").digest();
+  return crypto.createHash("sha256").update(source, "utf8").digest();
 }
 
 function timingSafeEqualText(a, b) {
@@ -101,11 +124,11 @@ function verifySession(token) {
   }
 }
 
-function setSessionCookie(res) {
+function setSessionCookie(res, req) {
   const token = signSession({ ok: true, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 });
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: isProduction,
+    secure: isProduction || req?.secure === true,
     sameSite: "lax",
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: "/"
@@ -113,8 +136,7 @@ function setSessionCookie(res) {
 }
 
 function requireConfig() {
-  if (!APP_PASSWORD) fail("APP_PASSWORD is not configured", 500);
-  if (!env("SESSION_SECRET")) fail("SESSION_SECRET is not configured", 500);
+  if (!getAppPassword()) fail("APP_PASSWORD is not configured for this deployment environment. Add APP_PASSWORD to the environment used by this deployment.", 503);
   if (!API_ID || !API_HASH || !TELEGRAM_SESSION) {
     fail("Telegram environment variables are not fully configured", 500);
   }
@@ -375,24 +397,56 @@ function totalUsed(files) {
 
 /* ---------- Authentication ---------- */
 app.get("/api/auth/me", (req, res) => {
-  res.json({ authenticated: verifySession(req.cookies[COOKIE_NAME]) });
+  let authenticated = false;
+  try { authenticated = verifySession(req.cookies[COOKIE_NAME]); } catch (_) {}
+  res.json({ authenticated });
 });
 
 app.post("/api/auth/login", (req, res) => {
   try {
-    if (!APP_PASSWORD) fail("APP_PASSWORD is not configured", 500);
-    if (!timingSafeEqualText(req.body?.password || "", APP_PASSWORD)) {
-      return res.status(401).json({ error: "Incorrect password" });
+    const expected = getAppPassword();
+    if (!expected) {
+      return res.status(503).json({
+        ok: false,
+        code: "APP_PASSWORD_MISSING",
+        error: "APP_PASSWORD is not configured for this deployment. Add it to the same Vercel environment as this URL, then redeploy."
+      });
     }
-    setSessionCookie(res);
-    res.json({ ok: true, authenticated: true });
+
+    const supplied = typeof req.body?.password === "string" ? req.body.password : "";
+    if (!timingSafeEqualText(supplied, expected)) {
+      return res.status(401).json({ ok: false, code: "INVALID_PASSWORD", error: "Incorrect password" });
+    }
+
+    setSessionCookie(res, req);
+    return res.status(200).json({ ok: true, authenticated: true });
   } catch (err) {
-    res.status(err.status || 500).json({ error: err.message || "Login failed" });
+    console.error("AUTH LOGIN ERROR", err);
+    return res.status(err.status || 500).json({
+      ok: false,
+      code: "AUTH_SERVER_ERROR",
+      error: err.message || "Login failed"
+    });
   }
 });
 
+// Safe diagnostic: never returns any secret value.
+app.get("/api/auth/status", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({
+    ok: true,
+    appPasswordConfigured: Boolean(getAppPassword()),
+    sessionSecretConfigured: Boolean(readSecret("SESSION_SECRET")),
+    telegramApiConfigured: Boolean(readSecret("TELEGRAM_API_ID") && readSecret("TELEGRAM_API_HASH")),
+    telegramSessionConfigured: Boolean(readSecret("TELEGRAM_SESSION")),
+    storageChatConfigured: Boolean(readSecret("TELEGRAM_STORAGE_CHAT")),
+    nodeEnv: process.env.NODE_ENV || "unknown",
+    deployment: process.env.VERCEL_ENV || "local"
+  });
+});
+
 app.post("/api/auth/logout", (req, res) => {
-  res.clearCookie(COOKIE_NAME, { httpOnly: true, secure: isProduction, sameSite: "lax", path: "/" });
+  res.clearCookie(COOKIE_NAME, { httpOnly: true, secure: isProduction || req?.secure === true, sameSite: "lax", path: "/" });
   res.json({ ok: true });
 });
 
@@ -603,7 +657,7 @@ app.delete("/api/files", requireAuth, async (req, res) => {
     // The authenticated website session is the primary authorization.
     // If the client supplies DELETE_PASSWORD, validate it as an additional check.
     const supplied = req.headers["x-delete-password"] || req.body?.password || "";
-    if (DELETE_PASSWORD && supplied && !timingSafeEqualText(supplied, DELETE_PASSWORD)) {
+    if (getDeletePassword() && supplied && !timingSafeEqualText(supplied, getDeletePassword())) {
       return res.status(403).json({ error: "Invalid delete password" });
     }
     const name = sanitizeName(req.body?.name || "");
