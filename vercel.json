@@ -1,9 +1,0 @@
-{
-  "version": 2,
-  "functions": {
-    "api/[...path].js": {
-      "runtime": "nodejs24.x",
-      "maxDuration": 300
-    }
-  }
-}
