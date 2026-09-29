@@ -1,8 +1,8 @@
 {
   "name": "my-personal-cloud-telegram-backend",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "Telegram MTProto-backed private cloud backend for My Personal Cloud / Cloud-Zen.",
+  "description": "Telegram MTProto-backed private cloud backend with robust Vercel authentication and 4 MiB chunk uploads.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
