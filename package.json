@@ -1,20 +1,7 @@
 {
-  "name": "cloud-zen-telegram-persistent-backend",
-  "version": "5.0.0",
+  "name": "cloud-zen-vercel-frontend",
+  "version": "4.0.0",
   "private": true,
-  "description": "Persistent single-process Telegram MTProto storage backend for Cloud-Zen / My Personal Cloud.",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "check": "node --check server.js",
-    "generate-session": "node generate-session.js"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "dependencies": {
-    "cookie-parser": "^1.4.7",
-    "express": "^5.1.0",
-    "teleproto": "^1.229.0"
-  }
+  "description": "Cloud-Zen Vercel frontend with same-origin proxy to one persistent Telegram backend",
+  "engines": { "node": "24.x" }
 }
