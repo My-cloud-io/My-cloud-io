@@ -3,90 +3,77 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#050b14">
-<title>Cloud-Zen — Private Access</title>
+<title>Cloud-Zen — Private Telegram Cloud</title>
 <style>
-:root{--bg:#03070d;--panel:rgba(9,18,31,.88);--panel2:rgba(14,26,43,.82);--line:#20364d;--text:#edf6ff;--muted:#89a0b8;--pink:#ffb6ad;--gold:#ffe28e;--cyan:#69e7ff;--danger:#ff6f7d;--ok:#78f0b2;--shadow:0 20px 70px rgba(0,0,0,.48)}
-*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#03070d;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}body{overflow-x:hidden}
-body:before,body:after{content:"";position:fixed;inset:auto;pointer-events:none;z-index:0}.wrap{position:relative;z-index:1;width:min(980px,100%);margin:auto;padding:18px 14px 70px}.glass{background:linear-gradient(145deg,rgba(13,28,46,.9),rgba(5,14,25,.84));border:1px solid var(--line);box-shadow:var(--shadow);backdrop-filter:blur(18px);border-radius:24px}
-.grid{display:grid;gap:14px}.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 17px}.brand{display:flex;align-items:center;gap:12px}.brandIcon{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;border:1px solid #47627d;background:#10253a;font-size:22px;box-shadow:0 0 25px rgba(105,231,255,.12)}h1,h2,h3,p{margin:0}.brand h1{font-size:18px}.brand small{color:var(--muted);font-size:11px}.statusDot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 15px var(--ok);display:inline-block;margin-right:7px}.btn{border:1px solid #314a63;background:#0e2235;color:var(--text);border-radius:13px;padding:10px 13px;font-weight:700;cursor:pointer}.btn:hover{filter:brightness(1.15)}.btn.primary{background:linear-gradient(90deg,var(--pink),var(--gold));color:#101010;border:0}.btn.danger{border-color:#5d2730;color:#ffadb5}.btn.cyan{border-color:#25566a;color:#9eefff}.btn.small{padding:8px 10px;font-size:12px}
-.login{min-height:100vh;display:grid;place-items:center;padding:18px}.loginCard{width:min(520px,100%);padding:34px;text-align:center}.logo{width:78px;height:78px;margin:auto;border-radius:24px;display:grid;place-items:center;background:#10273d;border:1px solid #47627d;font-size:36px;box-shadow:0 0 40px rgba(105,231,255,.1)}.title{margin:18px 0 7px;font-size:30px;font-weight:850;background:linear-gradient(90deg,var(--pink),var(--gold));color:transparent;background-clip:text}.muted{color:var(--muted)}input{font:inherit;color:var(--text);background:#071522;border:1px solid #315069;outline:none;border-radius:14px;padding:13px 14px}input:focus{border-color:#68a4c8;box-shadow:0 0 0 3px rgba(105,231,255,.08)}.login input{width:100%;margin:22px 0 10px}.login .btn{width:100%;padding:14px}.error{min-height:22px;margin-top:10px;color:#ff9fa8;font-size:13px}.hidden{display:none!important}
-.stats{display:grid;grid-template-columns:1fr 1fr;gap:14px}.stat{padding:18px}.statLabel{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em}.statValue{font-size:23px;font-weight:850;margin-top:6px}.bar{height:9px;background:#06101b;border:1px solid #1b3044;border-radius:99px;overflow:hidden;margin:14px 0 8px}.fill{height:100%;width:0;background:linear-gradient(90deg,var(--pink),var(--gold));transition:width .25s}
-.toolbar{padding:13px;display:grid;grid-template-columns:1fr auto auto;gap:9px}.upload{padding:16px}.uploadBox{border:1px dashed #35526a;border-radius:18px;padding:18px;text-align:center;background:rgba(4,13,23,.45)}.uploadBox strong{display:block;margin-bottom:5px}.uploadBox span{font-size:12px;color:var(--muted)}
-.files{overflow:hidden}.filesHead{padding:16px 16px 10px;display:flex;align-items:center;justify-content:space-between;gap:12px}.list{padding:0 12px 12px}.row{display:grid;grid-template-columns:44px 1fr auto;align-items:center;gap:12px;padding:12px 8px;border-top:1px solid rgba(45,68,89,.45)}.ico{width:44px;height:44px;border-radius:13px;display:grid;place-items:center;background:#0a1c2d;border:1px solid #29445c;font-size:20px}.name{font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.meta{font-size:11px;color:var(--muted);margin-top:4px}.actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.actions .btn{font-size:11px;padding:7px 8px}.empty{padding:30px;text-align:center;color:var(--muted)}.status{padding:0 16px 16px;color:var(--muted);font-size:12px}.progress{height:6px;margin-top:7px;border-radius:99px;overflow:hidden;background:#06101b}.progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--cyan),var(--gold));transition:width .1s}
-.viewer{position:fixed;z-index:20;inset:0;background:rgba(0,0,0,.88);display:flex;flex-direction:column}.viewerTop{display:flex;justify-content:space-between;align-items:center;padding:14px;border-bottom:1px solid #23384a;background:#07121e}.viewerBody{flex:1;display:grid;place-items:center;padding:14px;overflow:auto}.viewerBody img,.viewerBody video,.viewerBody iframe{max-width:100%;max-height:85vh;width:100%;height:85vh;border:0;border-radius:14px;background:#000}.viewerBody img{object-fit:contain}.viewerBody audio{width:min(700px,100%)}
-.toast{position:fixed;z-index:30;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;pointer-events:none;background:#0d1d2e;border:1px solid #31506a;padding:11px 14px;border-radius:13px;box-shadow:var(--shadow);transition:.2s;font-size:13px}.toast.show{opacity:1;transform:translate(-50%,0)}.loginSub{font-size:14px}.tag{display:inline-flex;align-items:center;gap:6px;padding:6px 9px;border:1px solid #284157;border-radius:99px;color:#9db2c6;font-size:11px}.menu{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:25;display:grid;place-items:end center}.menuCard{width:min(520px,calc(100% - 18px));margin-bottom:10px;padding:9px;border-radius:20px;background:#091827;border:1px solid #29465f;box-shadow:var(--shadow)}.menuCard button{width:100%;text-align:left;margin:3px 0}.dangerText{color:#ff9ca7}
-@media(max-width:720px){.stats{grid-template-columns:1fr}.toolbar{grid-template-columns:1fr 1fr}.toolbar input{grid-column:1/-1}.top{padding:13px}.row{grid-template-columns:40px 1fr}.actions{grid-column:2;justify-content:flex-start}.actions .btn{font-size:10px}.brand h1{font-size:16px}.title{font-size:27px}.loginCard{padding:28px 20px}}
+:root{--bg:#05070d;--panel:#0b1020e8;--line:#27304a;--text:#edf2ff;--muted:#8791ac;--pink:#ff9bc9;--gold:#ffd78b;--cyan:#69f3ff;--red:#ff6b87}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#18213e 0,transparent 38%),radial-gradient(circle at 90% 20%,#2a1631 0,transparent 30%),var(--bg);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif;min-height:100vh}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(#ffffff05 1px,transparent 1px),linear-gradient(90deg,#ffffff05 1px,transparent 1px);background-size:42px 42px;mask-image:linear-gradient(to bottom,#fff,transparent)}
+main{width:min(1100px,94vw);margin:auto;padding:28px 0 60px}.brand{letter-spacing:.18em;font-weight:800;font-size:13px;color:var(--cyan)}h1{font-size:clamp(28px,6vw,54px);margin:8px 0;background:linear-gradient(90deg,var(--pink),var(--gold));-webkit-background-clip:text;color:transparent}.sub{color:var(--muted);margin-bottom:22px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:22px;box-shadow:0 18px 70px #0008;backdrop-filter:blur(18px);padding:18px;margin:14px 0}.login{max-width:500px;margin:12vh auto}.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1}input,button{border:1px solid var(--line);border-radius:13px;padding:13px 14px;background:#080d19;color:var(--text);font:inherit}button{cursor:pointer}button.primary{border:0;background:linear-gradient(100deg,var(--pink),var(--gold));color:#16121a;font-weight:800}button.danger{color:#ffd8df;border-color:#5d2634}.toolbar{display:grid;grid-template-columns:1fr auto;gap:10px}.stats{display:flex;gap:10px;flex-wrap:wrap}.stat{padding:11px 13px;border:1px solid var(--line);border-radius:13px;color:var(--muted)}.stat b{color:var(--text)}.files{display:grid;gap:10px}.file{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:14px;border:1px solid #222a40;border-radius:16px;background:#080d18cc}.name{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.meta{font-size:12px;color:var(--muted);margin-top:4px}.actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.actions button{padding:9px 10px;font-size:12px}.hidden{color:var(--pink)}.progress{height:9px;border-radius:99px;background:#161c2c;overflow:hidden;margin-top:12px}.bar{height:100%;width:0;background:linear-gradient(90deg,var(--pink),var(--gold));transition:width .15s}.status{margin-top:9px;color:var(--muted);font-size:13px;min-height:20px}.viewer{position:fixed;inset:0;background:#02040beF;z-index:5;display:none;padding:18px}.viewer.show{display:flex;flex-direction:column}.viewer iframe,.viewer video,.viewer audio,.viewer img{width:100%;height:calc(100vh - 75px);border:0;object-fit:contain;background:#000;border-radius:14px}.close{align-self:flex-end;margin-bottom:10px}.empty{text-align:center;padding:45px;color:var(--muted)}
+@media(max-width:650px){main{padding-top:18px}.panel{border-radius:18px}.toolbar{grid-template-columns:1fr}.file{grid-template-columns:1fr}.actions{justify-content:flex-start}.actions button{flex:1}}
 </style>
 </head>
 <body>
-<section id="login" class="login">
-  <div class="glass loginCard">
-    <div class="logo">✦</div>
-    <div class="title">Private Access</div>
-    <p class="muted loginSub">Enter your Cloud-Zen password to continue.</p>
-    <form id="loginForm">
-      <input id="password" type="password" autocomplete="current-password" placeholder="Access password" required>
-      <button class="btn primary" type="submit">ENTER CLOUD</button>
-    </form>
-    <div id="loginError" class="error"></div>
-  </div>
-</section>
+<main>
+  <div class="brand">CZ / TELEGRAM STORAGE NODE</div>
+  <h1>Cloud-Zen</h1>
+  <div class="sub">Private cloud interface · Telegram-backed storage</div>
 
-<main id="app" class="wrap hidden">
-  <header class="glass top">
-    <div class="brand"><div class="brandIcon">☁</div><div><h1>Cloud-Zen</h1><small><span class="statusDot"></span>Private Telegram Storage</small></div></div>
-    <button id="logout" class="btn small">Lock</button>
-  </header>
-
-  <div style="height:14px"></div>
-  <section class="stats">
-    <div class="glass stat"><div class="statLabel">Telegram cloud</div><div id="used" class="statValue">0 B / 10 GB</div><div class="bar"><div id="fill" class="fill"></div></div><div id="freeText" class="muted" style="font-size:11px">Free: 10 GB</div></div>
-    <div class="glass stat"><div class="statLabel">Files</div><div id="count" class="statValue">0</div><div style="height:9px"></div><div class="tag">⚡ Telegram-backed</div></div>
+  <section id="login" class="panel login">
+    <h2>Private Access</h2>
+    <p class="sub">Sign in to manage your Telegram-backed files.</p>
+    <div class="row"><input id="password" type="password" placeholder="Website password"><button class="primary" onclick="login()">ENTER</button></div>
+    <div id="loginStatus" class="status"></div>
   </section>
 
-  <div style="height:14px"></div>
-  <section class="glass toolbar"><input id="search" type="search" placeholder="Search files, audio, video, documents..."><button id="searchBtn" class="btn cyan">Search</button><button id="refresh" class="btn">Refresh</button></section>
-  <div style="height:14px"></div>
+  <section id="app" style="display:none">
+    <div class="panel">
+      <div class="row">
+        <input id="fileInput" type="file" multiple>
+        <button class="primary" onclick="uploadSelected()">UPLOAD TO TELEGRAM</button>
+        <button onclick="logout()">LOG OUT</button>
+      </div>
+      <div id="uploadArea"></div>
+    </div>
 
-  <section class="glass upload">
-    <div class="uploadBox"><strong>Upload to Telegram</strong><span>Videos • 4K • documents • images • audio • recordings • any file</span><div style="height:12px"></div><button id="choose" class="btn primary">＋ Select files</button><input id="fileInput" type="file" multiple hidden></div>
-  </section>
-  <div style="height:14px"></div>
+    <div class="panel">
+      <div class="toolbar">
+        <input id="search" placeholder="Search files, audio, video, documents..." oninput="loadFiles()">
+        <div class="row" style="flex:0 0 auto"><button onclick="toggleHidden()" id="hiddenBtn">SHOW HIDDEN</button><button onclick="loadAll()">REFRESH</button></div>
+      </div>
+      <div class="stats" style="margin-top:12px"><div class="stat">Used <b id="used">—</b></div><div class="stat">Free <b id="free">—</b></div><div class="stat">Files <b id="count">—</b></div><div class="stat">Telegram <b id="tg">—</b></div></div>
+    </div>
 
-  <section class="glass files">
-    <div class="filesHead"><div><h3>Your Cloud</h3><div id="status" class="muted" style="font-size:11px;margin-top:4px">Connecting to Telegram...</div></div><button id="hiddenBtn" class="btn small">Hidden</button></div>
-    <div id="list" class="list"></div>
-    <div id="empty" class="empty hidden">No files found.</div>
+    <div class="panel"><div id="files" class="files"><div class="empty">Loading cloud index…</div></div></div>
   </section>
 </main>
 
-<div id="viewer" class="viewer hidden"><div class="viewerTop"><b id="viewerTitle">Preview</b><button id="closeViewer" class="btn small">Close</button></div><div id="viewerBody" class="viewerBody"></div></div>
-<div id="menu" class="menu hidden"><div class="menuCard"><button id="mOpen" class="btn">Open</button><button id="mShare" class="btn">Share link</button><button id="mDownload" class="btn">Download</button><button id="mHide" class="btn">Hide</button><button id="mRename" class="btn">Rename</button><button id="mDelete" class="btn danger dangerText">Delete</button><button id="mCancel" class="btn">Cancel</button></div></div>
-<div id="toast" class="toast"></div>
+<div id="viewer" class="viewer"><button class="close" onclick="closeViewer()">CLOSE</button><div id="viewerBody" style="flex:1;min-height:0"></div></div>
 
 <script>
-const $=id=>document.getElementById(id);let files=[];let activeFile=null;const CHUNK=4*1024*1024;
-function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function toast(s){const t=$('toast');t.textContent=s;t.classList.add('show');clearTimeout(window.__toast);window.__toast=setTimeout(()=>t.classList.remove('show'),2400)}
-async function api(url,opt={}){const r=await fetch(url,{credentials:'same-origin',...opt});let d=null;try{d=await r.json()}catch{}if(r.status===401){showLogin();throw Error('Authentication required')}if(!r.ok)throw Error(d?.detail||d?.error||'Request failed');return d}
-function showLogin(){$('login').classList.remove('hidden');$('app').classList.add('hidden')}
-function showApp(){$('login').classList.add('hidden');$('app').classList.remove('hidden');loadAll()}
-function fmt(n){n=Number(n)||0;if(n<1024)return n+' B';const u=['KB','MB','GB','TB'];let i=Math.min(3,Math.floor(Math.log(n)/Math.log(1024))-1);return (n/1024**(i+1)).toFixed(i?2:0)+' '+u[i]}
-function icon(f){if(f.mime?.startsWith('video/'))return '▶';if(f.mime?.startsWith('audio/'))return '♫';if(f.mime?.startsWith('image/'))return '▧';if(f.mime==='application/pdf')return 'PDF';return '▤'}
-async function loadStorage(){const d=await api('/api/storage');$('used').textContent=`${d.usedText} / ${d.limitText}`;$('freeText').textContent=`Free: ${d.remainingText}`;$('fill').style.width=Math.min(100,d.usedPercent)+'%';$('count').textContent=d.files}
-async function loadFiles(hidden=false){$('status').textContent=hidden?'Loading hidden files...':'Loading Telegram files...';const q=$('search').value.trim();const d=await api('/api/files?hidden='+hidden+(q?'&q='+encodeURIComponent(q):''));files=d.files||[];render(hidden);$('status').textContent=`${files.length} file${files.length===1?'':'s'} • ${hidden?'hidden':'visible'}`}
-function render(hidden){const list=$('list');list.innerHTML='';$('empty').classList.toggle('hidden',files.length>0);for(const f of files){const row=document.createElement('div');row.className='row';row.innerHTML=`<div class="ico">${icon(f)}</div><div><div class="name" title="${esc(f.name)}">${esc(f.name)}</div><div class="meta">${fmt(f.size)} • ${esc(f.mime||'file')}</div></div><div class="actions"><button class="btn" data-menu="${esc(f.id)}">•••</button></div>`;list.appendChild(row)}}
-function contentUrl(id,download=false){return '/api/files/'+encodeURIComponent(id)+'/content'+(download?'?download=1':'')}
-function openFile(f){$('viewerTitle').textContent=f.name;const b=$('viewerBody');b.innerHTML='';const url=contentUrl(f.id);if(f.mime?.startsWith('image/'))b.innerHTML=`<img src="${url}" alt="${esc(f.name)}">`;else if(f.mime?.startsWith('video/'))b.innerHTML=`<video src="${url}" controls autoplay playsinline></video>`;else if(f.mime?.startsWith('audio/'))b.innerHTML=`<audio src="${url}" controls autoplay></audio>`;else if(f.mime==='application/pdf')b.innerHTML=`<iframe src="${url}" title="PDF preview"></iframe>`;else{downloadFile(f);return}$('viewer').classList.remove('hidden')}
-function downloadFile(f){const a=document.createElement('a');a.href=contentUrl(f.id,true);a.download=f.name;document.body.appendChild(a);a.click();a.remove()}
-async function upload(file){const fid=crypto.randomUUID();const total=Math.max(1,Math.ceil(file.size/CHUNK));const row=document.createElement('div');row.className='row';row.innerHTML=`<div class="ico">↑</div><div><div class="name">${esc(file.name)}</div><div class="meta" id="p-${fid}">Uploading 0%</div><div class="progress"><i id="b-${fid}"></i></div></div><div class="tag">Telegram</div>`;$('list').prepend(row);for(let i=0;i<total;i++){const blob=file.slice(i*CHUNK,Math.min(file.size,(i+1)*CHUNK));await new Promise((resolve,reject)=>{const x=new XMLHttpRequest();x.open('POST','/api/upload-chunk');x.withCredentials=true;x.setRequestHeader('Content-Type','application/octet-stream');x.setRequestHeader('X-File-Id',fid);x.setRequestHeader('X-Chunk-Index',i);x.setRequestHeader('X-Total-Chunks',total);x.setRequestHeader('X-File-Name',file.name);x.setRequestHeader('X-File-Size',file.size);x.setRequestHeader('X-File-Mime',file.type||'application/octet-stream');x.timeout=300000;x.upload.onprogress=e=>{if(e.lengthComputable){const p=((i*CHUNK+e.loaded)/file.size)*100;$('p-'+fid).textContent=`Uploading ${Math.floor(p)}%`;$('b-'+fid).style.width=p+'%'}};x.onload=()=>x.status>=200&&x.status<300?resolve():reject(Error(x.responseText||('Upload failed '+x.status)));x.onerror=()=>reject(Error('Network error'));x.ontimeout=()=>reject(Error('Upload timed out'));x.send(blob)});}toast(file.name+' uploaded to Telegram');await loadAll()}
-async function loadAll(){try{await loadStorage();await loadFiles(false)}catch(e){$('status').textContent=e.message;toast(e.message)}}
-function closeMenu(){$('menu').classList.add('hidden');activeFile=null}
-async function action(type){if(!activeFile)return;const f=activeFile;try{if(type==='open')openFile(f);if(type==='download')downloadFile(f);if(type==='share'){const d=await api('/api/files/'+encodeURIComponent(f.id)+'/share',{method:'POST'});try{await navigator.clipboard.writeText(d.url);toast('Share link copied')}catch{prompt('Share link',d.url)}}if(type==='hide'){await api('/api/files/'+encodeURIComponent(f.id)+'/hide',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hidden:!f.hidden})});toast(f.hidden?'File unhidden':'File hidden');await loadAll()}if(type==='rename'){const n=prompt('New file name',f.name);if(n)await api('/api/files/'+encodeURIComponent(f.id)+'/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});await loadAll()}if(type==='delete'){const p=prompt('Delete password');if(!p)return;await api('/api/files/'+encodeURIComponent(f.id),{method:'DELETE',headers:{'Content-Type':'application/json','X-Delete-Password':p},body:JSON.stringify({password:p})});toast('File deleted');await loadAll()}}catch(e){toast(e.message)}finally{closeMenu()}}
-$('loginForm').onsubmit=async e=>{e.preventDefault();$('loginError').textContent='';try{await api('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('password').value})});$('password').value='';showApp()}catch(e){$('loginError').textContent=e.message}};
-$('choose').onclick=()=>$('fileInput').click();$('fileInput').onchange=async e=>{for(const f of e.target.files){try{await upload(f)}catch(err){toast(err.message)}}e.target.value=''};$('refresh').onclick=loadAll;$('searchBtn').onclick=()=>loadFiles(false);$('search').onkeydown=e=>{if(e.key==='Enter')loadFiles(false)};$('logout').onclick=async()=>{await api('/api/auth/logout',{method:'POST'});showLogin()};$('closeViewer').onclick=()=>$('viewer').classList.add('hidden');$('mCancel').onclick=closeMenu;$('mOpen').onclick=()=>action('open');$('mShare').onclick=()=>action('share');$('mDownload').onclick=()=>action('download');$('mHide').onclick=()=>action('hide');$('mRename').onclick=()=>action('rename');$('mDelete').onclick=()=>action('delete');$('menu').onclick=e=>{if(e.target===$('menu'))closeMenu()};$('list').onclick=e=>{const b=e.target.closest('[data-menu]');if(!b)return;activeFile=files.find(f=>f.id===b.dataset.menu);if(!activeFile)return;$('mHide').textContent=activeFile.hidden?'Unhide':'Hide';$('menu').classList.remove('hidden')};$('hiddenBtn').onclick=async()=>{try{await loadFiles(true)}catch(e){toast(e.message)}};
-(async()=>{try{const d=await api('/api/auth/me');if(d.authenticated)showApp();else showLogin()}catch{showLogin()}})();
+const $=id=>document.getElementById(id);
+const fmt=n=>{n=Number(n||0);const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return n.toFixed(i?1:0)+' '+u[i]};
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(url,opt={}){const r=await fetch(url,{credentials:'same-origin',...opt});const j=await r.json().catch(()=>({ok:false,error:'BAD_RESPONSE'}));if(!r.ok)throw new Error(j.error||'REQUEST_FAILED');return j}
+async function login(){try{await api('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('password').value})});$('login').style.display='none';$('app').style.display='block';await loadAll()}catch(e){$('loginStatus').textContent=e.message}}
+async function logout(){await api('/api/auth/logout',{method:'POST'});location.reload()}
+async function loadAll(){await Promise.all([loadFiles(),loadStorage(),health()])}
+async function health(){try{const j=await fetch('/api/health').then(r=>r.json());$('tg').textContent=j.telegram?'ONLINE':'OFFLINE'}catch{$('tg').textContent='ERROR'}}
+async function loadStorage(){try{const j=await api('/api/storage');$('used').textContent=fmt(j.used);$('free').textContent=fmt(j.free);$('count').textContent=j.count}catch(e){$('used').textContent='ERROR'}}
+let showHidden=false;
+function toggleHidden(){showHidden=!showHidden;$('hiddenBtn').textContent=showHidden?'HIDE HIDDEN':'SHOW HIDDEN';loadFiles()}
+async function loadFiles(){try{const q=encodeURIComponent($('search').value||'');const j=await api('/api/files?q='+q+'&includeHidden='+(showHidden?'1':'0'));$('files').innerHTML=j.files.length?j.files.map(renderFile).join(''):'<div class="empty">No files found.</div>'}catch(e){$('files').innerHTML='<div class="empty">'+esc(e.message)+'</div>'}}
+function renderFile(f){return `<div class="file"><div><div class="name">${esc(f.name)} ${f.hidden?'<span class="hidden">[HIDDEN]</span>':''}</div><div class="meta">${fmt(f.size)} · ${esc(f.mime||'file')} ${f.legacy?'· legacy Telegram file':''}</div></div><div class="actions"><button onclick="openFile('${f.id}','${esc(f.mime||'')}','${esc(f.name)}')">OPEN</button><button onclick="location.href='${f.downloadUrl}'">DOWNLOAD</button><button onclick="renameFile('${f.id}','${esc(f.name)}')">RENAME</button><button onclick="shareFile('${f.id}')">SHARE</button><button onclick="hideFile('${f.id}',${!f.hidden})">${f.hidden?'UNHIDE':'HIDE'}</button><button class="danger" onclick="deleteFile('${f.id}')">DELETE</button></div></div>`}
+async function uploadSelected(){const files=[...$('fileInput').files];if(!files.length)return;for(const file of files)await uploadFile(file);await loadAll()}
+async function uploadFile(file){const area=document.createElement('div');area.className='panel';area.innerHTML=`<b>${esc(file.name)}</b><div class="progress"><div class="bar"></div></div><div class="status">Starting…</div>`;$('uploadArea').prepend(area);const bar=area.querySelector('.bar'),status=area.querySelector('.status');try{const start=await api('/api/upload-start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:file.name,size:file.size,mime:file.type||'application/octet-stream'})});for(let i=0;i<start.total;i++){const blob=file.slice(i*start.chunkSize,Math.min(file.size,(i+1)*start.chunkSize));const b64=await toBase64(blob);const params=new URLSearchParams({fileId:start.fileId,index:i,total:start.total,size:file.size,mime:start.mime,name:start.name});await api('/api/upload-chunk?'+params,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:b64})});bar.style.width=Math.round(((i+1)/start.total)*100)+'%';status.textContent=`Uploading ${i+1}/${start.total} · ${Math.round(((i+1)/start.total)*100)}%`}await api('/api/upload-finish',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileId:start.fileId})});status.textContent='Uploaded to Telegram ✓'}catch(e){status.textContent='Upload failed: '+e.message}}
+function toBase64(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]);r.onerror=reject;r.readAsDataURL(blob)})}
+async function renameFile(id,old){const name=prompt('New file name:',old);if(!name||name===old)return;try{await api('/api/files/'+encodeURIComponent(id)+'/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});await loadFiles()}catch(e){alert(e.message)}}
+async function hideFile(id,hidden){try{await api('/api/files/'+encodeURIComponent(id)+'/hide',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hidden})});await loadAll()}catch(e){alert(e.message)}}
+async function shareFile(id){try{const j=await api('/api/files/'+encodeURIComponent(id)+'/share');const absolute=new URL(j.url,location.origin).href;if(navigator.clipboard)await navigator.clipboard.writeText(absolute);else prompt('Share link',absolute);alert('Share link copied. It expires in 24 hours.')}catch(e){alert(e.message)}}
+async function deleteFile(id){const p=prompt('Enter DELETE_PASSWORD to permanently remove this Telegram data:');if(p===null)return;try{await api('/api/files/'+encodeURIComponent(id)+'/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});await loadAll()}catch(e){alert(e.message)}}
+function openFile(id,mime,name){const v=$('viewer'),b=$('viewerBody');v.classList.add('show');const url='/api/files/'+encodeURIComponent(id)+'/open';if(mime.startsWith('image/'))b.innerHTML=`<img src="${url}" alt="">`;else if(mime.startsWith('video/'))b.innerHTML=`<video src="${url}" controls autoplay></video>`;else if(mime.startsWith('audio/'))b.innerHTML=`<audio src="${url}" controls autoplay></audio>`;else if(mime==='application/pdf'||mime.startsWith('text/'))b.innerHTML=`<iframe src="${url}" title="${esc(name)}"></iframe>`;else b.innerHTML=`<iframe src="${url}" title="${esc(name)}"></iframe>`}
+function closeViewer(){$('viewer').classList.remove('show');$('viewerBody').innerHTML=''}
+(async()=>{try{const j=await api('/api/auth/me');if(j.ok){$('login').style.display='none';$('app').style.display='block';loadAll()}}catch{}})();
 </script>
 </body>
 </html>
