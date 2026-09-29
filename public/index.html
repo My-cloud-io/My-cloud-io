@@ -6812,7 +6812,7 @@ async function uploadFiles(
 ========================================================= */
 
 const CHUNK_SIZE =
-    4 * 1024 * 1024;
+    100 * 1024 * 1024;
 
 
 async function uploadFile(
@@ -6987,11 +6987,6 @@ function uploadChunkWithProgress(
             xhr.setRequestHeader(
                 "Content-Type",
                 "application/octet-stream"
-            );
-
-            xhr.setRequestHeader(
-                "Content-Length",
-                String(blob.size)
             );
 
             xhr.upload.onprogress =
