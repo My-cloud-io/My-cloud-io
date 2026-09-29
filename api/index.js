@@ -1,6 +1,6 @@
 const app = require("../server");
 
-// Vercel Node function: keep request parsing under the app's control.
+// Let the Express route use express.raw() for the binary upload endpoint.
 module.exports = app;
 module.exports.config = {
   api: {
