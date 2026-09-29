@@ -1,6 +1,6 @@
 {
   "name": "my-personal-cloud-telegram-backend",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Telegram MTProto-backed private cloud backend for My Personal Cloud / Cloud-Zen.",
   "main": "server.js",
