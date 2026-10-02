@@ -13,7 +13,7 @@ const { stdin: input, stdout: output } = require("node:process");
   }
 
   const { TelegramClient } = await import("teleproto");
-  const { StringSession } = await import("teleproto/sessions/index.js");
+  const { StringSession } = await import("teleproto/sessions");
   const rl = readline.createInterface({ input, output });
 
   try {
