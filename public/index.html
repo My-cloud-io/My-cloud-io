@@ -2550,6 +2550,51 @@ input[type="password"]::placeholder{
 
 
 /* =========================================================
+   ACTION MODALS
+========================================================= */
+.actionModal{
+    position:fixed;
+    inset:0;
+    z-index:1200;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(2,7,13,.82);
+    backdrop-filter:blur(18px);
+}
+.actionModal.show{display:flex;}
+.actionBox{
+    width:min(430px,94vw);
+    padding:22px;
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:22px;
+    background:#0b1625;
+    box-shadow:0 30px 100px rgba(0,0,0,.55);
+}
+.actionBox h3{margin:0 0 8px;font-size:18px;}
+.actionBox p{margin:0 0 14px;color:#9aa8bc;font-size:13px;line-height:1.5;}
+.actionBox input{
+    width:100%;
+    height:48px;
+    box-sizing:border-box;
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:13px;
+    background:#07111f;
+    color:#fff;
+    padding:0 13px;
+    outline:none;
+}
+.actionBox input:focus{border-color:rgba(255,190,150,.55);}
+.actionError{min-height:20px;margin-top:8px;color:#ff9eb9;font-size:12px;}
+.actionButtons{display:flex;gap:10px;margin-top:12px;}
+.actionButtons button{flex:1;min-height:44px;border:0;border-radius:12px;cursor:pointer;font-weight:800;}
+.actionCancel{background:rgba(255,255,255,.08);color:#dbe5f2;}
+.actionConfirm{background:linear-gradient(135deg,#ffd0a6,#ff9fbd);color:#111827;}
+.actionConfirm.danger{background:linear-gradient(135deg,#ffb2bf,#ff7f9e);}
+@media(max-width:520px){.actionBox{padding:18px;border-radius:19px}.actionButtons{flex-direction:column;}}
+
+/* =========================================================
    VIEWER
 ========================================================= */
 
@@ -3602,6 +3647,35 @@ input[type="password"]::placeholder{
 
 </main>
 
+
+<!-- =======================================================
+     DELETE / RENAME MODALS
+======================================================= -->
+<section id="deleteModal" class="actionModal" aria-hidden="true">
+    <div class="actionBox">
+        <h3>Delete file</h3>
+        <p id="deleteModalText">Enter your delete password to permanently remove this file from Telegram.</p>
+        <input id="deletePasswordInput" type="password" autocomplete="current-password" placeholder="Delete password">
+        <div id="deleteModalError" class="actionError"></div>
+        <div class="actionButtons">
+            <button id="deleteCancel" class="actionCancel" type="button">Cancel</button>
+            <button id="deleteConfirm" class="actionConfirm danger" type="button">Delete</button>
+        </div>
+    </div>
+</section>
+
+<section id="renameModal" class="actionModal" aria-hidden="true">
+    <div class="actionBox">
+        <h3>Rename file</h3>
+        <p>Enter the new name. The change will also be saved to Telegram.</p>
+        <input id="renameInput" type="text" autocomplete="off" placeholder="New file name">
+        <div id="renameModalError" class="actionError"></div>
+        <div class="actionButtons">
+            <button id="renameCancel" class="actionCancel" type="button">Cancel</button>
+            <button id="renameConfirm" class="actionConfirm" type="button">Rename</button>
+        </div>
+    </div>
+</section>
 
 <!-- =======================================================
      VIEWER
@@ -4878,42 +4952,30 @@ window.cloudLogout =
    STORAGE
 ========================================================= */
 
-async function loadStorage(){
-
-    const data =
-        await api(
-            "/api/storage"
-        );
-
-
-    storageNumber.textContent =
-        `${data.usedText} / ${data.limitText}`;
-
-
-    storagePercent.textContent =
-        `${data.usedPercent}%`;
-
-
-    storageBar.style.width =
-        `${Math.min(
-            100,
-            Number(
-                data.usedPercent
-            ) || 0
-        )}%`;
-
-
-    storageUsed.textContent =
-        `Used: ${data.usedText}`;
-
-
-    storageRemaining.textContent =
-        `Free: ${data.remainingText}`;
-
-
+async function loadStorage(options = {}){
+    const cacheKey = "cloud_zen_storage_cache_v1";
+    if(!options.skipCache){
+        try{
+            const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
+            if(cached){
+                storageNumber.textContent = `${cached.usedText} / ${cached.limitText}`;
+                storagePercent.textContent = `${cached.usedPercent}%`;
+                storageBar.style.width = `${Math.min(100, Number(cached.usedPercent)||0)}%`;
+                storageUsed.textContent = `Used: ${cached.usedText}`;
+                storageRemaining.textContent = `Free: ${cached.remainingText}`;
+                renderStorageProviders(cached);
+            }
+        }catch(_){}
+    }
+    const data = await api("/api/storage");
+    try{ localStorage.setItem(cacheKey, JSON.stringify(data)); }catch(_){}
+    storageNumber.textContent = `${data.usedText} / ${data.limitText}`;
+    storagePercent.textContent = `${data.usedPercent}%`;
+    storageBar.style.width = `${Math.min(100, Number(data.usedPercent)||0)}%`;
+    storageUsed.textContent = `Used: ${data.usedText}`;
+    storageRemaining.textContent = `Free: ${data.remainingText}`;
     renderStorageProviders(data);
 }
-
 
 function renderStorageProviders(data){
 
@@ -5169,47 +5231,35 @@ downloadAllButton?.addEventListener(
    FILES
 ========================================================= */
 
-async function loadFiles(){
-
-    fileList.innerHTML =
-        `
-        <div class="empty">
-            <div class="emptyIcon">☁</div>
-            Loading your cloud...
-        </div>
-        `;
-
-
+async function loadFiles(options = {}){
+    const cacheKey = "cloud_zen_files_cache_v1";
+    let hadCache = false;
+    if(!options.skipCache){
+        try{
+            const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
+            if(Array.isArray(cached)){
+                allFiles = cached;
+                hadCache = true;
+                renderFiles();
+            }
+        }catch(_){}
+    }
+    if(!hadCache){
+        fileList.innerHTML = `<div class="empty"><div class="emptyIcon">☁</div>Loading your cloud...</div>`;
+    }
     try{
-
-        const files =
-            await api(
-                "/api/files"
-            );
-
-
-        allFiles =
-            Array.isArray(files)
-                ? files
-                : [];
-
-
+        const files = await api("/api/files");
+        allFiles = Array.isArray(files) ? files : [];
+        try{ localStorage.setItem(cacheKey, JSON.stringify(allFiles)); }catch(_){}
         renderFiles();
-
     }catch(error){
-
-        fileList.innerHTML =
-            `
-            <div class="empty">
-                <div class="emptyIcon">⚠</div>
-                ${escapeHtml(
-                    error.message
-                )}
-            </div>
-            `;
+        if(!hadCache){
+            fileList.innerHTML = `<div class="empty"><div class="emptyIcon">⚠</div>${escapeHtml(error.message)}</div>`;
+        }else{
+            showToast("Using cached files — reconnecting…");
+        }
     }
 }
-
 
 /* =========================================================
    FILE KEY
@@ -6007,6 +6057,23 @@ function createFileCard(
     );
 
 
+    const rename =
+        document.createElement(
+            "button"
+        );
+
+    rename.className =
+        "fileAction";
+
+    rename.textContent =
+        "Rename";
+
+    rename.addEventListener(
+        "click",
+        () => renameFile(file.name)
+    );
+
+
     const more =
         document.createElement(
             "button"
@@ -6041,8 +6108,9 @@ function createFileCard(
 
     actions.append(
         open,
-        download,
         share,
+        download,
+        rename,
         more
     );
 
@@ -6680,84 +6748,139 @@ function closeViewer(){
 
 
 /* =========================================================
-   DELETE
+   DELETE / RENAME
 ========================================================= */
 
-async function deleteFile(
-    name
-){
+const deleteModal = document.getElementById("deleteModal");
+const deletePasswordInput = document.getElementById("deletePasswordInput");
+const deleteModalError = document.getElementById("deleteModalError");
+const deleteConfirm = document.getElementById("deleteConfirm");
+const deleteCancel = document.getElementById("deleteCancel");
+const renameModal = document.getElementById("renameModal");
+const renameInput = document.getElementById("renameInput");
+const renameModalError = document.getElementById("renameModalError");
+const renameConfirm = document.getElementById("renameConfirm");
+const renameCancel = document.getElementById("renameCancel");
+let pendingDeleteName = "";
+let pendingRenameName = "";
 
-    const ok =
-        confirm(
-            `Delete "${name}" permanently?`
-        );
+function openDeleteModal(name){
+    pendingDeleteName = name;
+    deletePasswordInput.value = "";
+    deleteModalError.textContent = "";
+    deleteConfirm.disabled = false;
+    deleteConfirm.textContent = "Delete";
+    deleteModal.classList.add("show");
+    deleteModal.setAttribute("aria-hidden", "false");
+    setTimeout(() => deletePasswordInput.focus(), 50);
+}
 
+function closeDeleteModal(){
+    pendingDeleteName = "";
+    deleteModal.classList.remove("show");
+    deleteModal.setAttribute("aria-hidden", "true");
+}
 
-    if(!ok){
+function openRenameModal(name){
+    pendingRenameName = name;
+    renameInput.value = name;
+    renameModalError.textContent = "";
+    renameConfirm.disabled = false;
+    renameConfirm.textContent = "Rename";
+    renameModal.classList.add("show");
+    renameModal.setAttribute("aria-hidden", "false");
+    setTimeout(() => { renameInput.focus(); renameInput.select(); }, 50);
+}
+
+function closeRenameModal(){
+    pendingRenameName = "";
+    renameModal.classList.remove("show");
+    renameModal.setAttribute("aria-hidden", "true");
+}
+
+async function performDelete(){
+    const name = pendingDeleteName;
+    const passwordValue = deletePasswordInput.value;
+    if(!name) return;
+    if(!passwordValue){
+        deleteModalError.textContent = "Enter the delete password.";
+        deletePasswordInput.focus();
         return;
     }
-
-
+    deleteConfirm.disabled = true;
+    deleteConfirm.textContent = "Deleting…";
+    deleteModalError.textContent = "";
     try{
-
-        await api(
-            "/api/files",
-            {
-
-                method:"DELETE",
-
-                headers:{
-                    "Content-Type":
-                        "application/json"
-                },
-
-                body:
-                    JSON.stringify({
-                        name
-                    })
-            }
-        );
-
-
-        starred.delete(
-            name
-        );
-
-
-        writeJSON(
-            STAR_KEY,
-            [...starred]
-        );
-
-
-        recent =
-            recent.filter(
-                item =>
-                    item !== name
-            );
-
-
-        writeJSON(
-            RECENT_KEY,
-            recent
-        );
-
-
-        showToast(
-            "File deleted"
-        );
-
-
+        await api("/api/files", {
+            method:"DELETE",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({name, deletePassword:passwordValue})
+        });
+        starred.delete(name);
+        writeJSON(STAR_KEY, [...starred]);
+        recent = recent.filter(item => item !== name);
+        writeJSON(RECENT_KEY, recent);
+        closeDeleteModal();
+        showToast("File deleted");
         await loadEverything();
-
     }catch(error){
-
-        alert(
-            error.message
-        );
+        deleteModalError.textContent = error.message || "Delete failed";
+        deleteConfirm.disabled = false;
+        deleteConfirm.textContent = "Delete";
     }
 }
 
+async function performRename(){
+    const oldName = pendingRenameName;
+    const newName = renameInput.value.trim();
+    if(!oldName) return;
+    if(!newName){
+        renameModalError.textContent = "Enter a file name.";
+        return;
+    }
+    if(newName === oldName){
+        closeRenameModal();
+        return;
+    }
+    renameConfirm.disabled = true;
+    renameConfirm.textContent = "Renaming…";
+    renameModalError.textContent = "";
+    try{
+        const result = await api("/api/files", {
+            method:"PATCH",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({name:oldName, newName})
+        });
+        const index = recent.indexOf(oldName);
+        if(index !== -1){ recent[index] = newName; writeJSON(RECENT_KEY, recent); }
+        if(starred.has(oldName)){ starred.delete(oldName); starred.add(newName); writeJSON(STAR_KEY, [...starred]); }
+        allFiles = allFiles.map(file => file.name === oldName ? (result.file || {...file, name:newName}) : file);
+        closeRenameModal();
+        renderFiles();
+        showToast("File renamed");
+    }catch(error){
+        renameModalError.textContent = error.message || "Rename failed";
+        renameConfirm.disabled = false;
+        renameConfirm.textContent = "Rename";
+    }
+}
+
+deleteConfirm.addEventListener("click", performDelete);
+deleteCancel.addEventListener("click", closeDeleteModal);
+renameConfirm.addEventListener("click", performRename);
+renameCancel.addEventListener("click", closeRenameModal);
+deletePasswordInput.addEventListener("keydown", event => { if(event.key === "Enter") performDelete(); });
+renameInput.addEventListener("keydown", event => { if(event.key === "Enter") performRename(); });
+deleteModal.addEventListener("click", event => { if(event.target === deleteModal) closeDeleteModal(); });
+renameModal.addEventListener("click", event => { if(event.target === renameModal) closeRenameModal(); });
+
+function deleteFile(name){
+    openDeleteModal(name);
+}
+
+function renameFile(name){
+    openRenameModal(name);
+}
 
 /* =========================================================
    UPLOAD INPUT
@@ -6910,7 +7033,7 @@ async function uploadFiles(
 ========================================================= */
 
 const CHUNK_SIZE =
-    100 * 1024 * 1024;
+    64 * 1024 * 1024;
 
 
 async function uploadFile(
@@ -7710,184 +7833,5 @@ async function loadEverything(){
 
         await Promise.all([
             loadStorage(),
-            loadFiles()
-        ]);
-
-    }catch(error){
-
-        console.error(
-            error
-        );
-    }
-}
-
-
-/* =========================================================
-   FORMAT BYTES
-========================================================= */
-
-function formatBytes(
-    bytes
-){
-
-    const value =
-        Number(bytes);
-
-
-    if(
-        !Number.isFinite(value) ||
-        value <= 0
-    ){
-
-        return "0 B";
-    }
-
-
-    const units = [
-        "B",
-        "KB",
-        "MB",
-        "GB",
-        "TB"
-    ];
-
-
-    const index =
-        Math.min(
-            Math.floor(
-                Math.log(value) /
-                Math.log(1024)
-            ),
-            units.length - 1
-        );
-
-
-    return (
-        value /
-        Math.pow(
-            1024,
-            index
-        )
-    )
-        .toFixed(
-            index === 0
-                ? 0
-                : 1
-        ) +
-        " " +
-        units[index];
-}
-
-
-/* =========================================================
-   ESCAPE
-========================================================= */
-
-function escapeHtml(
-    value
-){
-
-    return String(value)
-
-        .replace(
-            /&/g,
-            "&amp;"
-        )
-
-        .replace(
-            /</g,
-            "&lt;"
-        )
-
-        .replace(
-            />/g,
-            "&gt;"
-        )
-
-        .replace(
-            /"/g,
-            "&quot;"
-        )
-
-        .replace(
-            /'/g,
-            "&#039;"
-        );
-}
-
-
-/* =========================================================
-   KEYBOARD
-========================================================= */
-
-document.addEventListener(
-    "keydown",
-    event => {
-
-        if(
-            event.key ===
-            "Escape"
-        ){
-
-            closeViewer();
-
-            closeQRCode();
-        }
-
-
-        if(
-            event.key === "/" &&
-
-            document.activeElement !==
-                searchInput &&
-
-            document.activeElement !==
-                password
-        ){
-
-            event.preventDefault();
-
-            searchInput.focus();
-        }
-    }
-);
-
-
-/* =========================================================
-   WELCOME / START
-========================================================= */
-
-window.addEventListener(
-    "load",
-    () => {
-
-        setTimeout(
-            welcomeVoice,
-            450
-        );
-
-
-        setTimeout(
-            () => {
-
-                intro.classList.add(
-                    "hide"
-                );
-
-
-                checkAuthentication();
-
-            },
-            2500
-        );
-    }
-);
-
-</script>
-
-</body>
-    </html>
-
-
-
-    
+            loadFiles(
+Preview truncated for large file
