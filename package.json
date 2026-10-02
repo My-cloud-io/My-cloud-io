@@ -15,8 +15,6 @@
   "dependencies": {
     "archiver": "^7.0.1",
     "express": "^5.1.0",
-    "teleproto": "^1.229.0"
+    "teleproto": "^1.229.1"
   }
 }
-
-
