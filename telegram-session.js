@@ -1,37 +1,42 @@
-import { TelegramClient } from "teleproto";
-import { StringSession } from "teleproto/sessions/index.js";
-import { createInterface } from "node:readline/promises";
+"use strict";
 
-const apiId = Number(process.env.TELEGRAM_API_ID || 0);
-const apiHash = process.env.TELEGRAM_API_HASH || "";
+/* Run locally, not on Render, to create the Telegram MTProto session string. */
+const readline = require("node:readline/promises");
+const { stdin: input, stdout: output } = require("node:process");
 
-if (!apiId || !apiHash) {
-  console.error("Set TELEGRAM_API_ID and TELEGRAM_API_HASH first.");
+(async () => {
+  const apiId = Number(process.env.TELEGRAM_API_ID || 0);
+  const apiHash = String(process.env.TELEGRAM_API_HASH || "").trim();
+  if (!apiId || !apiHash) {
+    console.error("Set TELEGRAM_API_ID and TELEGRAM_API_HASH before running this script.");
+    process.exit(1);
+  }
+
+  const { TelegramClient } = await import("teleproto");
+  const { StringSession } = await import("teleproto/sessions");
+  const rl = readline.createInterface({ input, output });
+
+  try {
+    const client = new TelegramClient(new StringSession(""), apiId, apiHash, {
+      connectionRetries: 5,
+      retryDelay: 1000,
+    });
+
+    await client.start({
+      phoneNumber: async () => rl.question("Telegram phone number: "),
+      password: async () => rl.question("Telegram 2FA password (leave blank if none): "),
+      phoneCode: async () => rl.question("Telegram login code: "),
+      onError: (error) => console.error("Telegram login error:", error?.message || error),
+    });
+
+    console.log("\nLogin successful. Save this value as Render's TELEGRAM_SESSION secret:\n");
+    console.log(client.session.save());
+    await client.disconnect();
+  } finally {
+    rl.close();
+  }
+})().catch((error) => {
+  console.error(error?.stack || error);
   process.exit(1);
-}
-
-const rl = createInterface({ input: process.stdin, output: process.stdout });
-const ask = (q) => rl.question(q);
-
-const client = new TelegramClient(new StringSession(""), apiId, apiHash, {
-  connectionRetries: 5,
-  requestRetries: 3,
-  retryDelay: 1000
 });
-
-try {
-  await client.start({
-    phoneNumber: () => ask("Telegram phone number: "),
-    password: () => ask("Telegram 2FA password (press Enter if none): "),
-    phoneCode: () => ask("Telegram login code: "),
-    onError: (err) => console.error("[Telegram auth]", err?.message || err)
-  });
-
-  console.log("\nCONNECTED.");
-  console.log("Copy the following value into the ONE persistent backend's TELEGRAM_SESSION secret:\n");
-  console.log(client.session.save());
-  console.log("\nDo not put this value in public/index.html, GitHub, or chat.");
-} finally {
-  rl.close();
-  await client.disconnect().catch(() => {});
-}
+                       
