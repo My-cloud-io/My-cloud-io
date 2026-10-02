@@ -56,7 +56,7 @@ const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 3;
 
 if (!APP_PASSWORD || !DELETE_PASSWORD || !SESSION_SECRET) {
-  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in Vercel.");
+  console.warn("[Cloud-Zen] APP_PASSWORD, DELETE_PASSWORD and SESSION_SECRET must be set in Render.");
 }
 if (!TELEGRAM_API_ID || !TELEGRAM_API_HASH || !TELEGRAM_SESSION) {
   console.warn("[Cloud-Zen] Telegram MTProto credentials are not fully configured.");
@@ -100,12 +100,12 @@ async function getTelegramClient() {
     }
 
     const { TelegramClient } = await import("teleproto");
-    const { StringSession } = await import("teleproto/sessions/index.js");
+    const { StringSession } = await import("teleproto/sessions");
 
     const session = new StringSession(TELEGRAM_SESSION);
     const client = new TelegramClient(session, TELEGRAM_API_ID, TELEGRAM_API_HASH, {
-      connectionRetries: 5,
-      retryDelay: 1000,
+      connectionRetries: 8,
+      retryDelay: 1500,
       autoReconnect: true,
       requestRetries: 5,
       downloadPool: {
@@ -405,13 +405,10 @@ function parseChunkCaption(text) {
 let fileIndex = new Map();
 let indexLoaded = false;
 let indexPromise = null;
-let indexLastRefresh = 0;
-const INDEX_TTL_MS = Math.max(5000, Number(process.env.INDEX_TTL_MS || 30000));
 
 async function rebuildIndex(force = false) {
-  const now = Date.now();
-  if (indexPromise) return indexPromise;
-  if (indexLoaded && !force && (now - indexLastRefresh) < INDEX_TTL_MS) return fileIndex;
+  if (indexPromise && !force) return indexPromise;
+  if (indexLoaded && !force) return fileIndex;
 
   indexPromise = (async () => {
     const client = await getTelegramClient();
@@ -457,7 +454,6 @@ async function rebuildIndex(force = false) {
 
     fileIndex = next;
     indexLoaded = true;
-    indexLastRefresh = Date.now();
     return fileIndex;
   })();
 
@@ -620,7 +616,6 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
         modified: new Date().toISOString()
       });
       indexLoaded = true;
-      indexLastRefresh = Date.now();
       activeUploads.delete(uploadKey);
     }
 
@@ -825,8 +820,6 @@ app.patch("/api/files", requireAuth, async (req, res) => {
     const renamed = { ...file, name: newName, modified: new Date().toISOString() };
     fileIndex.delete(oldName);
     fileIndex.set(newName, renamed);
-    indexLoaded = true;
-    indexLastRefresh = Date.now();
     return res.json({ ok: true, file: publicFile(renamed) });
   } catch (error) {
     console.error("RENAME ERROR:", error);
@@ -929,8 +922,6 @@ app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) =>
     if (ids.length) await deleteTelegramMessages(ids);
 
     fileIndex.delete(name);
-    indexLoaded = true;
-    indexLastRefresh = Date.now();
     res.json({ ok: true, name, message: "File permanently deleted" });
   } catch (error) {
     console.error("DELETE ERROR:", error);
