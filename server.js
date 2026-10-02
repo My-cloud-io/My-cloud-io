@@ -4,8 +4,8 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TelegramClient } from "teleproto";
-import { StringSession } from "teleproto/sessions";
-import { CustomFile } from "teleproto/client/uploads";
+import { StringSession } from "teleproto/sessions/index.js";
+import { CustomFile } from "teleproto/client/uploads/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
