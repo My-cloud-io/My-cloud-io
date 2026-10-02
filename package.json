@@ -1,18 +1,20 @@
 {
-  "name": "cloud-zen-telegram-backend",
-  "version": "1.0.0",
+  "name": "cloud-zen",
+  "version": "3.1.0",
   "private": true,
-  "type": "module",
+  "description": "Cloud-Zen Ultimate mobile-first private cloud workspace",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "telegram:session": "node telegram-session.js"
+    "telegram:session": "node telegram-session.js",
+    "healthcheck": "node --check server.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
   },
   "dependencies": {
-    "cookie-parser": "^1.4.7",
+    "archiver": "^7.0.1",
     "express": "^5.1.0",
-    "teleproto": "^1.229.0"
+    "teleproto": "^1.229.1"
   }
 }
