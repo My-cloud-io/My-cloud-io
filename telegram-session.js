@@ -1,5 +1,5 @@
 import { TelegramClient } from "teleproto";
-import { StringSession } from "teleproto/sessions";
+import { StringSession } from "teleproto/sessions/index.js";
 import { createInterface } from "node:readline/promises";
 
 const apiId = Number(process.env.TELEGRAM_API_ID || 0);
