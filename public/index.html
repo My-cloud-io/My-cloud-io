@@ -5505,7 +5505,8 @@ function createFileCard(
 
         img.src =
             streamUrl(
-                file.name
+                file.name,
+                file.id
             );
 
         img.loading =
@@ -5531,7 +5532,8 @@ function createFileCard(
 
         video.src =
             streamUrl(
-                file.name
+                file.name,
+                file.id
             );
 
         video.muted =
@@ -5669,7 +5671,8 @@ function createFileCard(
             }else{
 
                 downloadFile(
-                    file.name
+                    file.name,
+                    file.id
                 );
             }
         }
@@ -5697,7 +5700,8 @@ function createFileCard(
             );
 
             downloadFile(
-                file.name
+                file.name,
+                file.id
             );
         }
     );
@@ -5908,7 +5912,8 @@ async function shareFile(
     const url =
         new URL(
             streamUrl(
-                file.name
+                file.name,
+                file.id
             ),
             window.location.origin
         ).href;
@@ -6174,30 +6179,28 @@ async function ensureStreamAccess(){
     }
 }
 
-function streamUrl(name){
+function streamUrl(name, fileId = ""){
     const base = "/api/stream/" + name.split("/").map(encodeURIComponent).join("/");
-    return streamAccessToken ? base + "?access=" + encodeURIComponent(streamAccessToken) : base;
+    const params = new URLSearchParams();
+    if(streamAccessToken) params.set("access", streamAccessToken);
+    if(fileId) params.set("fileId", fileId);
+    const query = params.toString();
+    return query ? base + "?" + query : base;
 }
 
 
 function downloadUrl(
-    name
+    name,
+    fileId = ""
 ){
-
-    return (
-        "/api/download/" +
-        name
-            .split("/")
-            .map(
-                encodeURIComponent
-            )
-            .join("/")
-    );
+    const base = "/api/download/" + name.split("/").map(encodeURIComponent).join("/");
+    return fileId ? base + "?fileId=" + encodeURIComponent(fileId) : base;
 }
 
 
 function downloadFile(
-    name
+    name,
+    fileId = ""
 ){
 
     const a =
@@ -6208,7 +6211,8 @@ function downloadFile(
 
     a.href =
         downloadUrl(
-            name
+            name,
+            fileId
         );
 
 
@@ -6295,7 +6299,7 @@ async function openViewer(
     let url;
     try{
         await ensureStreamAccess();
-        url = streamUrl(file.name);
+        url = streamUrl(file.name, file.id);
     }catch(error){
         showToast(error.message || "Preview authorization failed");
         return;
@@ -6766,9 +6770,7 @@ async function uploadFile(
         file.name
     );
 
-    // The upload is now durable in Telegram. Refresh the list only after the
-    // final chunk has completed so a successful upload is not hidden by a
-    // stale 30-second file-index cache.
+
     try{
         await loadStorage();
         await loadFiles();
@@ -6977,15 +6979,8 @@ function updateQueue(
 
 
     if(done){
-
-        setTimeout(
-            () => {
-
-                queue.item.remove();
-
-            },
-            1600
-        );
+        queue.item.classList.add("uploadComplete");
+        queue.remaining.textContent = "Upload complete • saved in your cloud";
     }
 }
 
@@ -7529,3 +7524,6 @@ window.addEventListener(
 </body>
     </html>
     
+
+
+
