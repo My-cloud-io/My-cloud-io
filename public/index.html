@@ -3091,27 +3091,6 @@ input[type="password"]::placeholder{
     }
 }
 
-
-
-/* =========================================================
-   UI UPGRADE — STORAGE ACCORDION + QUICK ACTION MENU
-   Added only; original styles and elements remain intact.
-========================================================= */
-.storageDetailsCard.storageCompact .storageProviderGrid{display:none;}
-.storageDetailsCard.storageCompact .storageDetailsHead{margin-bottom:0;}
-.storageAccordionButton{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:38px;border:1px solid var(--line);background:rgba(255,255,255,.045);color:#dbe5f2;border-radius:11px;padding:8px 11px;cursor:pointer;font-size:11px;font-weight:850;white-space:nowrap;transition:transform .18s ease,background .18s ease;}
-.storageAccordionButton:hover{background:rgba(255,255,255,.08);transform:translateY(-1px);}
-.storageAccordionButton .accordionChevron{display:inline-block;transition:transform .22s ease;}
-.fileActions{position:relative;}
-.fileActions .fileMoreButton{display:flex;align-items:center;justify-content:center;width:100%;min-height:38px;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.045);color:#dbe5f2;border-radius:12px;cursor:pointer;font-size:18px;font-weight:900;line-height:1;letter-spacing:2px;transition:background .18s ease,transform .18s ease;}
-.fileActions .fileMoreButton:hover{background:rgba(255,255,255,.09);transform:translateY(-1px);}
-.fileActions .fileAction{display:none;}
-.fileCard.quickActionsOpen .fileActions .fileAction{display:block;}
-.fileCard.quickActionsOpen .fileActions .fileMoreButton{display:none;}
-.fileCard:not(.quickActionsOpen) .deleteRow{display:none !important;}
-.fileCard.quickActionsOpen .deleteRow{display:flex !important;}
-@media(max-width:760px){.storageProviderGrid{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(220px,82%);overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;padding-bottom:4px;-webkit-overflow-scrolling:touch;}.storageProvider{scroll-snap-align:start;}}
-@media(max-width:470px){.storageAccordionButton{padding:8px 9px;}}
 </style>
 
 
@@ -3368,45 +3347,6 @@ input[type="password"]::placeholder{
             </div>
 
         </section>
-
-
-        <section
-            id="storageDetailsCard"
-            class="storageDetailsCard"
-        >
-
-            <div class="storageDetailsHead">
-
-                <div>
-
-                    <h2 class="storageDetailsTitle">
-                        Storage Locations
-                    </h2>
-
-                    <p class="storageDetailsSub">
-                        See used space and free space for every connected cloud.
-                    </p>
-
-                </div>
-
-                <button
-                    id="storageDetailsRefresh"
-                    class="storageDetailsRefresh"
-                    type="button"
-                >
-                    Refresh
-                </button>
-
-            </div>
-
-
-            <div
-                id="storageProviderGrid"
-                class="storageProviderGrid"
-            ></div>
-
-        </section>
-
 
         <div class="cloudToolbar">
 
@@ -4911,156 +4851,6 @@ async function loadStorage(){
         `Free: ${data.remainingText}`;
 
 
-    renderStorageProviders(data);
-}
-
-
-function renderStorageProviders(data){
-
-    if(!storageProviderGrid){
-        return;
-    }
-
-
-    const providers = [
-
-        {
-            key:"b2",
-            name:"Backblaze B2",
-            data:data.b2 || {}
-        },
-
-        {
-            key:"mega",
-            name:"MEGA",
-            data:data.mega || {}
-        },
-
-        {
-            key:"idriveE2",
-            name:"IDrive E2",
-            data:data.idriveE2 || {}
-        },
-
-        {
-            key:"cloudinary",
-            name:"Cloudinary",
-            data:data.cloudinary || {}
-        },
-
-        {
-            key:"filebase",
-            name:"Filebase",
-            data:data.filebase || {}
-        },
-
-        {
-            key:"koofr",
-            name:"Koofr",
-            data:data.koofr || {}
-        }
-    ];
-
-
-    storageProviderGrid.innerHTML = "";
-
-
-    providers.forEach(provider => {
-
-        const item =
-            document.createElement("div");
-
-        item.className =
-            "storageProvider";
-
-
-        const configured =
-            provider.data.configured !== false;
-
-        const connected =
-            provider.data.connected !== false;
-
-        const used =
-            Number(
-                provider.data.usedBytes ??
-                provider.data.totalBytes ??
-                0
-            );
-
-        const capacity =
-            Number(
-                provider.data.capacityBytes ??
-                provider.data.limitBytes ??
-                0
-            );
-
-        const remaining =
-            Number(
-                provider.data.remainingBytes ??
-                Math.max(0, capacity - used)
-            );
-
-        const percent =
-            capacity > 0
-                ? Math.min(
-                    100,
-                    (used / capacity) * 100
-                )
-                : 0;
-
-        const safePercent =
-            Number(percent.toFixed(2));
-
-        let statusText = "Connected";
-        let statusClass = "";
-
-        if(!configured){
-            statusText = "Not configured";
-            statusClass = "unconfigured";
-        }else if(!connected){
-            statusText = "Not connected";
-            statusClass = "offline";
-        }else if(safePercent >= 99.5){
-            statusText = "Near storage limit";
-            statusClass = "offline";
-        }
-
-
-        item.innerHTML = `
-            <div class="storageProviderTop">
-                <div class="storageProviderName">
-                    ${escapeHtml(provider.name)}
-                </div>
-                <div class="storageProviderPercent">
-                    ${configured ? safePercent : 0}%
-                </div>
-            </div>
-
-            <div class="storageProviderBar">
-                <div
-                    class="storageProviderFill"
-                    style="width:${configured ? safePercent : 0}%"
-                ></div>
-            </div>
-
-            <div class="storageProviderMeta">
-                <span>Used: ${escapeHtml(
-                    provider.data.usedText ||
-                    formatClientBytes(used)
-                )}</span>
-                <span>Free: ${escapeHtml(
-                    provider.data.remainingText ||
-                    formatClientBytes(remaining)
-                )}</span>
-            </div>
-
-            <div class="storageProviderStatus ${statusClass}">
-                ${escapeHtml(statusText)}
-            </div>
-        `;
-
-        storageProviderGrid.appendChild(item);
-    });
 }
 
 
@@ -5089,59 +4879,13 @@ function formatClientBytes(bytes){
 }
 
 
-
-/* =========================================================
-   STORAGE ACCORDION — COLLAPSE LONG PROVIDER LIST
-========================================================= */
-(function initStorageAccordion(){
-    const detailsCard = document.getElementById("storageDetailsCard");
-    const head = detailsCard?.querySelector(".storageDetailsHead");
-    if(!detailsCard || !head) return;
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "storageAccordionButton";
-    button.innerHTML = `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`;
-
-    button.addEventListener("click", () => {
-        const collapsed = detailsCard.classList.toggle("storageCompact");
-        button.innerHTML = collapsed
-            ? `Show <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌄</span>`
-            : `Hide <span class="accordionLabel">Clouds</span> <span class="accordionChevron">⌃</span>`;
-    });
-
-    head.appendChild(button);
-    detailsCard.classList.add("storageCompact");
-})();
-
-storageDetailsRefresh?.addEventListener(
-    "click",
-    async () => {
-        try{
-            storageDetailsRefresh.disabled = true;
-            storageDetailsRefresh.textContent = "Loading...";
-            await loadStorage();
-        }catch(error){
-            console.error(error);
-            showToast(
-                error.message ||
-                "Could not refresh storage"
-            );
-        }finally{
-            storageDetailsRefresh.disabled = false;
-            storageDetailsRefresh.textContent = "Refresh";
-        }
-    }
-);
-
-
 downloadAllButton?.addEventListener(
     "click",
     () => {
 
         const confirmed =
             window.confirm(
-                "Download all files from every connected storage as one ZIP? Large clouds may take a long time and the ZIP can be very large."
+                "Download all files as one ZIP? Large files may take a long time and the ZIP can be very large."
             );
 
         if(!confirmed){
@@ -5155,7 +4899,7 @@ downloadAllButton?.addEventListener(
             "/api/download-all";
 
         a.download =
-            "my-personal-cloud-all-storage.zip";
+            "Cloud-Zen-All-Files.zip";
 
         document.body.appendChild(a);
         a.click();
@@ -5986,6 +5730,29 @@ function createFileCard(
     );
 
 
+    const rename = document.createElement("button");
+    rename.className = "fileAction";
+    rename.textContent = "Rename";
+    rename.addEventListener("click", async () => {
+        const current = file.name.split("/").pop();
+        const next = window.prompt("New file name:", current);
+        if(next === null) return;
+        const trimmed = next.trim();
+        if(!trimmed || trimmed === current) return;
+        try{
+            await api("/api/files", {
+                method:"PATCH",
+                headers:{"Content-Type":"application/json"},
+                body: JSON.stringify({ name:file.name, newName:trimmed })
+            });
+            showToast("File renamed");
+            await loadEverything();
+        }catch(error){
+            alert(error.message || "Rename failed");
+        }
+    });
+
+
     const del =
         document.createElement(
             "button"
@@ -6007,43 +5774,11 @@ function createFileCard(
     );
 
 
-    const more =
-        document.createElement(
-            "button"
-        );
-
-    more.className =
-        "fileMoreButton";
-
-    more.type =
-        "button";
-
-    more.title =
-        "More actions";
-
-    more.setAttribute(
-        "aria-label",
-        "More actions"
-    );
-
-    more.textContent =
-        "•••";
-
-    more.addEventListener(
-        "click",
-        event => {
-            event.stopPropagation();
-            card.classList.toggle(
-                "quickActionsOpen"
-            );
-        }
-    );
-
     actions.append(
         open,
         download,
         share,
-        more
+        rename
     );
 
 
@@ -6081,26 +5816,6 @@ function createFileCard(
         info
     );
 
-
-    let longPressTimer = null;
-
-    const startLongPress = event => {
-        if(event.pointerType === "mouse") return;
-        clearTimeout(longPressTimer);
-        longPressTimer = setTimeout(() => {
-            card.classList.add("quickActionsOpen");
-        }, 520);
-    };
-
-    const cancelLongPress = () => {
-        clearTimeout(longPressTimer);
-        longPressTimer = null;
-    };
-
-    card.addEventListener("pointerdown", startLongPress, {passive:true});
-    card.addEventListener("pointerup", cancelLongPress);
-    card.addEventListener("pointercancel", cancelLongPress);
-    card.addEventListener("pointerleave", cancelLongPress);
 
     return card;
 }
@@ -6441,50 +6156,27 @@ function typeLabel(
 ========================================================= */
 
 let streamAccessToken = "";
+let streamAccessExpiresAt = 0;
 
 async function ensureStreamAccess(){
-    if(streamAccessToken){
+    if(streamAccessToken && Date.now() < streamAccessExpiresAt - 30000) return streamAccessToken;
+    try{
+        const response = await fetch("/api/access/stream", { credentials:"same-origin", cache:"no-store" });
+        const data = await response.json();
+        if(!response.ok || !data?.token) throw new Error(data?.error || "Could not authorize preview");
+        streamAccessToken = data.token;
+        streamAccessExpiresAt = Date.now() + Number(data.expiresIn || 900) * 1000;
         return streamAccessToken;
+    }catch(error){
+        streamAccessToken = "";
+        streamAccessExpiresAt = 0;
+        throw error;
     }
-
-    const result = await authApi(
-        "/api/access/stream"
-    );
-
-    streamAccessToken =
-        String(
-            result?.token ||
-            ""
-        );
-
-    return streamAccessToken;
 }
 
-
-function streamUrl(
-    name
-){
-
-    const path =
-        "/api/stream/" +
-        name
-            .split("/")
-            .map(
-                encodeURIComponent
-            )
-            .join("/");
-
-    if(!streamAccessToken){
-        return path;
-    }
-
-    return (
-        path +
-        "?access=" +
-        encodeURIComponent(
-            streamAccessToken
-        )
-    );
+function streamUrl(name){
+    const base = "/api/stream/" + name.split("/").map(encodeURIComponent).join("/");
+    return streamAccessToken ? base + "?access=" + encodeURIComponent(streamAccessToken) : base;
 }
 
 
@@ -6582,7 +6274,7 @@ viewer.addEventListener(
 );
 
 
-function openViewer(
+async function openViewer(
     file
 ){
 
@@ -6600,10 +6292,14 @@ function openViewer(
         );
 
 
-    const url =
-        streamUrl(
-            file.name
-        );
+    let url;
+    try{
+        await ensureStreamAccess();
+        url = streamUrl(file.name);
+    }catch(error){
+        showToast(error.message || "Preview authorization failed");
+        return;
+    }
 
 
     if(
@@ -6732,21 +6428,15 @@ async function deleteFile(
 
     try{
 
+        const deletePassword = window.prompt("Enter delete password to permanently remove this file:");
+        if(deletePassword === null) return;
+
         await api(
             "/api/files",
             {
-
                 method:"DELETE",
-
-                headers:{
-                    "Content-Type":
-                        "application/json"
-                },
-
-                body:
-                    JSON.stringify({
-                        name
-                    })
+                headers:{"Content-Type":"application/json"},
+                body: JSON.stringify({ name, deletePassword })
             }
         );
 
@@ -6942,7 +6632,7 @@ async function uploadFiles(
 ========================================================= */
 
 const CHUNK_SIZE =
-    100 * 1024 * 1024;
+    4 * 1024 * 1024;
 
 
 async function uploadFile(
@@ -7079,6 +6769,7 @@ async function uploadFile(
 
     try{
         await loadStorage();
+        await loadFiles();
     }catch(error){
         console.error(
             "STORAGE REFRESH AFTER UPLOAD ERROR:",
@@ -7093,123 +6784,39 @@ async function uploadFile(
 }
 
 
-function uploadChunkWithProgress(
-    url,
-    blob,
-    onProgress
-){
-
-    return new Promise(
-        (resolve, reject) => {
-
-            const xhr =
-                new XMLHttpRequest();
-
-            xhr.open(
-                "POST",
-                url,
-                true
-            );
-
-            xhr.withCredentials =
-                true;
-
-            xhr.setRequestHeader(
-                "Content-Type",
-                "application/octet-stream"
-            );
-
-            xhr.setRequestHeader(
-                "Content-Length",
-                String(blob.size)
-            );
-
-            xhr.upload.onprogress =
-                event => {
-
-                    if(
-                        event.lengthComputable
-                    ){
-
-                        onProgress(
-                            event.loaded
-                        );
-                    }
-                };
-
-            xhr.onerror =
-                () => {
-                    reject(
-                        new Error(
-                            "Network error during upload"
-                        )
-                    );
-                };
-
-            xhr.onabort =
-                () => {
-                    reject(
-                        new Error(
-                            "Upload cancelled"
-                        )
-                    );
-                };
-
-            xhr.onload =
-                async () => {
-
-                    let data = null;
-
-                    try{
-                        data =
-                            JSON.parse(
-                                xhr.responseText ||
-                                "null"
-                            );
-                    }catch(_){ }
-
-                    if(
-                        xhr.status === 401
-                    ){
-
-                        showLogin();
-
-                        reject(
-                            new Error(
-                                "Session expired"
-                            )
-                        );
-
-                        return;
-                    }
-
-                    if(
-                        xhr.status < 200 ||
-                        xhr.status >= 300
-                    ){
-
-                        reject(
-                            new Error(
-                                data?.error ||
-                                "Upload failed"
-                            )
-                        );
-
-                        return;
-                    }
-
-                    onProgress(
-                        blob.size
-                    );
-
-                    resolve(data);
-                };
-
-            xhr.send(blob);
-        }
-    );
+function uploadChunkWithProgress(url, blob, onProgress, attempt = 1){
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url, true);
+        xhr.withCredentials = true;
+        xhr.setRequestHeader("Content-Type", "application/octet-stream");
+        xhr.upload.onprogress = event => {
+            if(event.lengthComputable) onProgress(event.loaded);
+        };
+        xhr.onerror = () => {
+            if(attempt < 3){
+                setTimeout(() => uploadChunkWithProgress(url, blob, onProgress, attempt + 1).then(resolve, reject), 500 * attempt);
+            }else reject(new Error("Network error during upload"));
+        };
+        xhr.onabort = () => reject(new Error("Upload cancelled"));
+        xhr.onload = () => {
+            let data = null;
+            try{ data = JSON.parse(xhr.responseText || "null"); }catch(_){}
+            if(xhr.status === 401){ showLogin(); reject(new Error("Session expired")); return; }
+            if(xhr.status >= 500 && attempt < 3){
+                setTimeout(() => uploadChunkWithProgress(url, blob, onProgress, attempt + 1).then(resolve, reject), 500 * attempt);
+                return;
+            }
+            if(xhr.status < 200 || xhr.status >= 300){
+                reject(new Error(data?.error || "Upload failed"));
+                return;
+            }
+            onProgress(blob.size);
+            resolve(data);
+        };
+        xhr.send(blob);
+    });
 }
-
 
 
 /* =========================================================
@@ -7740,10 +7347,6 @@ async function loadEverything(){
 
     try{
 
-        // Get media authorization before native <img>/<video>/<audio>/<iframe>
-        // elements are created.
-        await ensureStreamAccess();
-
         await Promise.all([
             loadStorage(),
             loadFiles()
@@ -7923,7 +7526,4 @@ window.addEventListener(
 
 </body>
     </html>
-
-
-
     
