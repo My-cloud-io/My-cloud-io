@@ -464,6 +464,7 @@ async function rebuildIndex(force = false) {
 
 function publicFile(meta) {
   return {
+    id: meta.id,
     name: meta.name,
     size: meta.size,
     sizeText: formatBytes(meta.size),
@@ -518,6 +519,7 @@ app.get("/api/storage", requireAuth, async (req, res) => {
    FILE LIST
 ========================= */
 app.get("/api/files", requireAuth, async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   try {
     const index = await rebuildIndex();
     res.json([...index.values()].map(publicFile).sort((a, b) => a.name.localeCompare(b.name)));
@@ -533,6 +535,7 @@ app.get("/api/files", requireAuth, async (req, res) => {
 const activeUploads = new Map();
 
 app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   const id = String(req.query.id || "");
   const index = Number(req.query.index);
   const total = Number(req.query.total);
@@ -602,15 +605,6 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
       sha256
     });
 
-    // Every uploaded chunk is already durable in Telegram. Invalidate the
-    // in-memory index immediately so the next /api/files request rebuilds
-    // from Telegram instead of serving a stale list. This is important on
-    // Vercel because different chunk requests may execute in different
-    // function instances and cannot share activeUploads memory.
-    indexLoaded = false;
-    indexLastRefresh = 0;
-    fileIndex = new Map();
-
     // Keep only metadata in memory; the durable copy is Telegram itself.
     try { await fsp.unlink(tmp); } catch (_) {}
 
@@ -667,10 +661,24 @@ app.delete("/api/upload/:id", requireAuth, requireUploadPassword, async (req, re
 /* =========================
    FILE RESOLUTION
 ========================= */
-async function findFile(name) {
+async function findFile(name, fileId = "") {
   const clean = cleanName(name);
   const index = await rebuildIndex();
-  return index.get(clean) || null;
+  if (fileId) {
+    for (const meta of index.values()) {
+      if (String(meta.id) === String(fileId)) return meta;
+    }
+  }
+  const direct = index.get(clean);
+  if (direct) return direct;
+  // A fresh Telegram scan avoids serving a stale per-instance index after an upload/rename.
+  const fresh = await rebuildIndex(true);
+  if (fileId) {
+    for (const meta of fresh.values()) {
+      if (String(meta.id) === String(fileId)) return meta;
+    }
+  }
+  return fresh.get(clean) || null;
 }
 
 async function deleteTelegramMessages(ids) {
@@ -777,7 +785,7 @@ function requireStreamAuth(req, res, next) {
 app.get(/^\/api\/stream\/(.+)$/, requireStreamAuth, async (req, res) => {
   try {
     const name = decodeURIComponent(req.params[0]);
-    const file = await findFile(name);
+    const file = await findFile(name, String(req.query?.fileId || ""));
     if (!file) return res.status(404).send("File not found");
     await streamFileToResponse(req, res, file, true);
   } catch (error) {
@@ -789,7 +797,7 @@ app.get(/^\/api\/stream\/(.+)$/, requireStreamAuth, async (req, res) => {
 app.get(/^\/api\/download\/(.+)$/, requireAuth, requireDownloadPassword, async (req, res) => {
   try {
     const name = decodeURIComponent(req.params[0]);
-    const file = await findFile(name);
+    const file = await findFile(name, String(req.query?.fileId || ""));
     if (!file) return res.status(404).send("File not found");
     await streamFileToResponse(req, res, file, false);
   } catch (error) {
@@ -881,7 +889,7 @@ app.patch("/api/files", requireAuth, async (req, res) => {
 app.post("/api/share", requireAuth, async (req, res) => {
   try {
     const name = cleanName(req.body?.name);
-    const file = await findFile(name);
+    const file = await findFile(name, String(req.query?.fileId || ""));
     if (!file) return res.status(404).json({ error: "File not found" });
     const token = createShareToken(name, req.body?.ttlSeconds || 86400);
     const base = `${req.protocol}://${req.get("host")}`;
@@ -965,7 +973,7 @@ app.get(/^\/s\/([^/]+)\/download$/, async (req, res) => {
 app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) => {
   try {
     const name = cleanName(req.body?.name);
-    const file = await findFile(name);
+    const file = await findFile(name, String(req.query?.fileId || ""));
     if (!file) return res.status(404).json({ error: "File not found" });
 
     const client = await getTelegramClient();
