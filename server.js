@@ -303,6 +303,22 @@ app.post("/api/access/download", requireAuth, (req, res) => {
   res.json({ ok: true, expiresIn: 0, message: "Download is protected by the main Enter password." });
 });
 
+// Native media elements (<img>, <video>, <audio>, <iframe>) cannot use
+// fetch()'s credentials option. Issue a short-lived capability after the
+// dashboard session is authenticated so media requests stay authorized.
+app.get("/api/access/stream", requireAuth, (req, res) => {
+  const exp = Date.now() + 30 * 60 * 1000;
+  const token = signPayload({
+    type: "stream",
+    exp
+  });
+  res.json({
+    ok: true,
+    token,
+    expiresIn: Math.floor((exp - Date.now()) / 1000)
+  });
+});
+
 app.post("/api/auth/login", (req, res) => {
   if (isLocked(req, "login")) return res.status(423).json({ error: "Access locked for 24 hours on this device." });
   const password = String(req.body?.password ?? "").trim();
@@ -757,7 +773,17 @@ async function streamFileToResponse(req, res, meta, inline) {
 /* =========================
    STREAM / DOWNLOAD
 ========================= */
-app.get(/^\/api\/stream\/(.+)$/, requireAuth, async (req, res) => {
+app.get(/^\/api\/stream\/(.+)$/, (req, res, next) => {
+  const access = String(req.query?.access || "");
+  const streamSession = verifyPayload(access);
+
+  if (streamSession && streamSession.type === "stream") {
+    req.cloudSession = streamSession;
+    return next();
+  }
+
+  return requireAuth(req, res, next);
+}, async (req, res) => {
   try {
     const name = decodeURIComponent(req.params[0]);
     const file = await findFile(name);
