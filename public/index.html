@@ -6440,18 +6440,50 @@ function typeLabel(
    STREAM / DOWNLOAD
 ========================================================= */
 
+let streamAccessToken = "";
+
+async function ensureStreamAccess(){
+    if(streamAccessToken){
+        return streamAccessToken;
+    }
+
+    const result = await authApi(
+        "/api/access/stream"
+    );
+
+    streamAccessToken =
+        String(
+            result?.token ||
+            ""
+        );
+
+    return streamAccessToken;
+}
+
+
 function streamUrl(
     name
 ){
 
-    return (
+    const path =
         "/api/stream/" +
         name
             .split("/")
             .map(
                 encodeURIComponent
             )
-            .join("/")
+            .join("/");
+
+    if(!streamAccessToken){
+        return path;
+    }
+
+    return (
+        path +
+        "?access=" +
+        encodeURIComponent(
+            streamAccessToken
+        )
     );
 }
 
@@ -7707,6 +7739,10 @@ qrModal.addEventListener(
 async function loadEverything(){
 
     try{
+
+        // Get media authorization before native <img>/<video>/<audio>/<iframe>
+        // elements are created.
+        await ensureStreamAccess();
 
         await Promise.all([
             loadStorage(),
