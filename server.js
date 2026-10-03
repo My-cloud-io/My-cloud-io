@@ -602,6 +602,15 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
       sha256
     });
 
+    // Every uploaded chunk is already durable in Telegram. Invalidate the
+    // in-memory index immediately so the next /api/files request rebuilds
+    // from Telegram instead of serving a stale list. This is important on
+    // Vercel because different chunk requests may execute in different
+    // function instances and cannot share activeUploads memory.
+    indexLoaded = false;
+    indexLastRefresh = 0;
+    fileIndex = new Map();
+
     // Keep only metadata in memory; the durable copy is Telegram itself.
     try { await fsp.unlink(tmp); } catch (_) {}
 
