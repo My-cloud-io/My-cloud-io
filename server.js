@@ -45,10 +45,7 @@ const TELEGRAM_API_HASH = String(process.env.TELEGRAM_API_HASH || "").trim();
 const TELEGRAM_SESSION = String(process.env.TELEGRAM_SESSION || "").trim();
 const TELEGRAM_STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || "me").trim();
 
-const CHUNK_SIZE = Math.max(
-  4 * 1024 * 1024,
-  Math.min(Number(process.env.CHUNK_SIZE || 64 * 1024 * 1024), 512 * 1024 * 1024)
-);
+const CHUNK_SIZE = 4 * 1024 * 1024;
 const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 20 * 1024 * 1024 * 1024 * 1024);
 const MAX_CHUNKS = 100000;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -303,22 +300,6 @@ app.post("/api/access/download", requireAuth, (req, res) => {
   res.json({ ok: true, expiresIn: 0, message: "Download is protected by the main Enter password." });
 });
 
-// Native media elements (<img>, <video>, <audio>, <iframe>) cannot use
-// fetch()'s credentials option. Issue a short-lived capability after the
-// dashboard session is authenticated so media requests stay authorized.
-app.get("/api/access/stream", requireAuth, (req, res) => {
-  const exp = Date.now() + 30 * 60 * 1000;
-  const token = signPayload({
-    type: "stream",
-    exp
-  });
-  res.json({
-    ok: true,
-    token,
-    expiresIn: Math.floor((exp - Date.now()) / 1000)
-  });
-});
-
 app.post("/api/auth/login", (req, res) => {
   if (isLocked(req, "login")) return res.status(423).json({ error: "Access locked for 24 hours on this device." });
   const password = String(req.body?.password ?? "").trim();
@@ -488,8 +469,8 @@ function publicFile(meta) {
     sizeText: formatBytes(meta.size),
     modified: meta.modified || null,
     type: mimeFor(meta.name),
-    storage: "CLOUD",
-    storageLabel: "Cloud Storage",
+    storage: "PRIVATE_CLOUD",
+    storageLabel: "Private Cloud",
     chunks: meta.total
   };
 }
@@ -524,10 +505,9 @@ app.get("/api/storage", requireAuth, async (req, res) => {
       usedBytes: used,
       usedText: formatBytes(used),
       remainingBytes: null,
-      remainingText: "Telegram cloud",
+      remainingText: "Available",
       usedPercent: 0,
-      limitText: "Cloud",
-      provider: { configured: telegramReady, connected: telegramReady, usedText: formatBytes(used), remainingText: "Cloud" }
+      limitText: "Private Cloud"
     });
   } catch (error) {
     res.status(503).json({ error: error.message });
@@ -771,19 +751,21 @@ async function streamFileToResponse(req, res, meta, inline) {
 }
 
 /* =========================
-   STREAM / DOWNLOAD
+   STREAM ACCESS / STREAM / DOWNLOAD
 ========================= */
-app.get(/^\/api\/stream\/(.+)$/, (req, res, next) => {
-  const access = String(req.query?.access || "");
-  const streamSession = verifyPayload(access);
+app.get("/api/access/stream", requireAuth, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ok: true, token: createActionToken("stream"), expiresIn: 15 * 60 });
+});
 
-  if (streamSession && streamSession.type === "stream") {
-    req.cloudSession = streamSession;
-    return next();
-  }
+function requireStreamAuth(req, res, next) {
+  if (getSession(req)) return next();
+  const token = String(req.query?.access || "");
+  if (validActionToken(token, "stream")) return next();
+  return res.status(401).send("Authentication required");
+}
 
-  return requireAuth(req, res, next);
-}, async (req, res) => {
+app.get(/^\/api\/stream\/(.+)$/, requireStreamAuth, async (req, res) => {
   try {
     const name = decodeURIComponent(req.params[0]);
     const file = await findFile(name);
@@ -841,14 +823,41 @@ app.patch("/api/files", requireAuth, async (req, res) => {
     if (fileIndex.has(newName)) return res.status(409).json({ error: "A file with that name already exists." });
 
     const client = await getTelegramClient();
-    for (const chunk of file.chunks.values()) {
-      const messages = await client.getMessages(TELEGRAM_STORAGE_CHAT, { ids: [Number(chunk.messageId)] });
-      const message = Array.isArray(messages) ? messages[0] : messages;
-      if (!message) throw new Error(`Stored chunk ${chunk.index + 1} not found`);
-      const caption = captionFor({ ...file, name: newName }, chunk.index, chunk.sha256);
-      await client.editMessage(TELEGRAM_STORAGE_CHAT, { message: Number(chunk.messageId), text: caption });
+    const newChunks = new Map();
+    const tempDir = path.join(TMP_DIR, `rename-${crypto.randomUUID()}`);
+    await fsp.mkdir(tempDir, { recursive: true });
+
+    try {
+      for (let i = 0; i < file.total; i += 1) {
+        const oldChunk = file.chunks.get(i);
+        if (!oldChunk) throw new Error(`Stored chunk ${i + 1} not found`);
+        const chunkDir = path.join(tempDir, String(i));
+        await fsp.mkdir(chunkDir, { recursive: true });
+        const target = path.join(chunkDir, newName);
+        await downloadChunkToFile(oldChunk.messageId, target);
+        const caption = captionFor({ ...file, name: newName }, i, oldChunk.sha256);
+        const message = await client.sendFile(TELEGRAM_STORAGE_CHAT, {
+          file: target,
+          caption,
+          forceDocument: true,
+          workers: Math.max(1, Math.min(Number(process.env.TELEGRAM_WORKERS || 8), 16)),
+          progressCallback: () => {}
+        });
+        newChunks.set(i, {
+          messageId: Number(message?.id),
+          index: i,
+          size: oldChunk.size,
+          sha256: oldChunk.sha256
+        });
+      }
+
+      const oldIds = [...file.chunks.values()].map(c => Number(c.messageId)).filter(Boolean);
+      if (oldIds.length) await deleteTelegramMessages(oldIds);
+    } finally {
+      await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     }
-    const renamed = { ...file, name: newName, modified: new Date().toISOString() };
+
+    const renamed = { ...file, name: newName, chunks: newChunks, modified: new Date().toISOString() };
     fileIndex.delete(oldName);
     fileIndex.set(newName, renamed);
     indexLoaded = true;
@@ -957,7 +966,7 @@ app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) =>
     fileIndex.delete(name);
     indexLoaded = true;
     indexLastRefresh = Date.now();
-    res.json({ ok: true, name, message: "File permanently deleted" });
+    res.json({ ok: true, name, message: "File permanently deleted from private cloud storage" });
   } catch (error) {
     console.error("DELETE ERROR:", error);
     res.status(500).json({ error: error.message || "Delete failed" });
