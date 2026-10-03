@@ -6766,7 +6766,9 @@ async function uploadFile(
         file.name
     );
 
-
+    // The upload is now durable in Telegram. Refresh the list only after the
+    // final chunk has completed so a successful upload is not hidden by a
+    // stale 30-second file-index cache.
     try{
         await loadStorage();
         await loadFiles();
