@@ -4850,6 +4850,9 @@ async function loadStorage(){
     storageRemaining.textContent =
         `Free: ${data.remainingText}`;
 
+    if(data.fileCount !== undefined && filesCount && !allFiles.length){
+        filesCount.textContent = `${data.fileCount} ${data.fileCount === 1 ? "file" : "files"}`;
+    }
 
 }
 
@@ -5747,7 +5750,7 @@ function createFileCard(
             await api("/api/files", {
                 method:"PATCH",
                 headers:{"Content-Type":"application/json"},
-                body: JSON.stringify({ name:file.name, newName:trimmed })
+                body: JSON.stringify({ name:file.name, newName:trimmed, fileId:file.id })
             });
             showToast("File renamed");
             await loadEverything();
@@ -5773,7 +5776,8 @@ function createFileCard(
         "click",
         () =>
             deleteFile(
-                file.name
+                file.name,
+                file.id
             )
     );
 
@@ -5908,68 +5912,42 @@ function rememberRecent(
 async function shareFile(
     file
 ){
+    try{
+        const data = await api("/api/share", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({
+                name:file.name,
+                fileId:file.id,
+                ttlSeconds:86400
+            })
+        });
 
-    const url =
-        new URL(
-            streamUrl(
-                file.name,
-                file.id
-            ),
-            window.location.origin
-        ).href;
+        const url = data.url;
 
-
-    if(
-        navigator.share
-    ){
-
-        try{
-
-            await navigator.share({
-
-                title:
-                    file.name,
-
-                text:
-                    `Shared from My Personal Cloud: ${file.name}`,
-
-                url
-            });
-
-            return;
-
-        }catch(error){
-
-            if(
-                error?.name ===
-                "AbortError"
-            ){
-
+        if(navigator.share){
+            try{
+                await navigator.share({
+                    title:file.name,
+                    text:`Shared from Cloud-Zen: ${file.name}`,
+                    url
+                });
                 return;
+            }catch(error){
+                if(error?.name === "AbortError") return;
             }
         }
-    }
 
-
-    try{
-
-        await navigator.clipboard.writeText(
-            url
-        );
-
-        showToast(
-            "File link copied"
-        );
-
-    }catch(_){
-
-        prompt(
-            "Copy this file link:",
-            url
-        );
+        try{
+            await navigator.clipboard.writeText(url);
+            showToast("Share link copied");
+        }catch(_){
+            prompt("Copy this file link:", url);
+        }
+    }catch(error){
+        showToast(error.message || "Could not create share link");
     }
 }
-
 
 /* =========================================================
    PREVIEW
@@ -6416,7 +6394,8 @@ function closeViewer(){
 ========================================================= */
 
 async function deleteFile(
-    name
+    name,
+    fileId = ""
 ){
 
     const ok =
@@ -6440,7 +6419,7 @@ async function deleteFile(
             {
                 method:"DELETE",
                 headers:{"Content-Type":"application/json"},
-                body: JSON.stringify({ name, deletePassword })
+                body: JSON.stringify({ name, fileId, deletePassword })
             }
         );
 
