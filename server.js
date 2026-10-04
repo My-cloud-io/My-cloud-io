@@ -452,7 +452,13 @@ async function rebuildIndex(force = false) {
       }
     }
 
-    fileIndex = next;
+    // Never wipe a healthy in-memory index because a transient Telegram read
+    // returned no complete records. Existing files must remain visible until
+    // their Telegram chunks are explicitly deleted. A deliberate delete route
+    // updates fileIndex itself, so this guard does not create undeletable ghosts.
+    if (next.size > 0 || fileIndex.size === 0) {
+      fileIndex = next;
+    }
     indexLoaded = true;
     indexLastRefresh = Date.now();
     return fileIndex;
