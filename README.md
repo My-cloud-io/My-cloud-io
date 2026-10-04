@@ -1,23 +1,25 @@
-Cloud-Zen 4.0.0 — Vercel + Telegram private storage
-This build keeps Telegram as the real storage backend while hiding the storage provider from the website UI.
-UI behavior
-No Show Clouds / Hide Clouds / provider cards.
-No Backblaze B2, MEGA, IDrive, Cloudinary, Filebase or Koofr labels.
-Telegram is not shown as a storage provider in the UI.
-Files remain stored in Telegram until the user explicitly deletes them.
-Delete removes the stored Telegram chunk messages and the file disappears from the website index.
-Rename re-uploads each Telegram document with the new filename, then removes the old Telegram messages.
-Image/video/audio/PDF previews use a short-lived stream access token so native browser media requests do not fail with 401.
-Uploads use fixed 4 MiB chunks, no manual Content-Length header, progress reporting and retries.
-Vercel environment variables
+Cloud-Zen 4.0.1 — Telegram Private Cloud
+This build keeps Telegram as the durable storage backend and the existing mobile-first UI.
+Included
+Telegram-backed multipart upload
+Durable Telegram reconstruction after reload/redeploy
+Open/preview images, videos, audio and PDF in the website
+Download files
+Durable share links
+Rename and permanent delete
+Storage usage + logical 10 GB display quota
+File count
+Vercel Express deployment configuration
+Existing session helper
+Required Vercel environment variables
 APP_PASSWORD
 DELETE_PASSWORD
 SESSION_SECRET
 TELEGRAM_API_ID
 TELEGRAM_API_HASH
 TELEGRAM_SESSION
-TELEGRAM_STORAGE_CHAT=me
+TELEGRAM_STORAGE_CHAT (optional; defaults to me)
+TELEGRAM_WORKERS (optional)
+STORAGE_LIMIT_BYTES (optional; defaults to 10 GiB for the UI meter)
 NODE_ENV=production
-Do not put Telegram credentials in public/index.html.
-Deploy
-Replace server.js, public/index.html, and package.json in the existing Vercel project and redeploy.
+Do not put Telegram credentials in public files or the repository.
