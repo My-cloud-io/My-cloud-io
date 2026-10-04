@@ -1,6 +1,6 @@
 {
   "name": "cloud-zen",
-  "version": "4.0.1",
+  "version": "4.0.2",
   "private": true,
   "description": "Cloud-Zen Ultimate mobile-first private cloud workspace",
   "main": "server.js",
