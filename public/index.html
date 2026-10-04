@@ -4850,9 +4850,6 @@ async function loadStorage(){
     storageRemaining.textContent =
         `Free: ${data.remainingText}`;
 
-    if(data.fileCount !== undefined && filesCount && !allFiles.length){
-        filesCount.textContent = `${data.fileCount} ${data.fileCount === 1 ? "file" : "files"}`;
-    }
 
 }
 
@@ -5776,8 +5773,7 @@ function createFileCard(
         "click",
         () =>
             deleteFile(
-                file.name,
-                file.id
+                file.name
             )
     );
 
@@ -5909,41 +5905,27 @@ function rememberRecent(
    SHARE
 ========================================================= */
 
-async function shareFile(
-    file
-){
+async function shareFile(file){
     try{
         const data = await api("/api/share", {
             method:"POST",
             headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({
-                name:file.name,
-                fileId:file.id,
-                ttlSeconds:604800
-            })
+            body:JSON.stringify({name:file.name, fileId:file.id, ttlSeconds:604800})
         });
-
-        const url = data.url;
-
+        const url = new URL(data.url, window.location.origin).href;
+        const shareData = {
+            title: `Cloud-Zen v4.0.4 — ${file.name}`,
+            text: `Cloud-Zen v4.0.4 — ${file.name}`,
+            url
+        };
         if(navigator.share){
-            try{
-                await navigator.share({
-                    title:file.name,
-                    text:`Shared from Cloud-Zen: ${file.name}`,
-                    url
-                });
-                return;
-            }catch(error){
-                if(error?.name === "AbortError") return;
-            }
+            try{ await navigator.share(shareData); return; }
+            catch(error){ if(error?.name === "AbortError") return; }
         }
-
         try{
             await navigator.clipboard.writeText(url);
-            showToast("Share link copied");
-        }catch(_){
-            prompt("Copy this file link:", url);
-        }
+            showToast("Cloud-Zen share link copied");
+        }catch(_){ prompt("Cloud-Zen share link:", url); }
     }catch(error){
         showToast(error.message || "Could not create share link");
     }
@@ -6394,8 +6376,7 @@ function closeViewer(){
 ========================================================= */
 
 async function deleteFile(
-    name,
-    fileId = ""
+    name
 ){
 
     const ok =
@@ -6419,7 +6400,7 @@ async function deleteFile(
             {
                 method:"DELETE",
                 headers:{"Content-Type":"application/json"},
-                body: JSON.stringify({ name, fileId, deletePassword })
+                body: JSON.stringify({ name, deletePassword })
             }
         );
 
@@ -6614,8 +6595,8 @@ async function uploadFiles(
    CHUNK UPLOAD
 ========================================================= */
 
-const CHUNK_SIZE =
-    4 * 1024 * 1024;
+const CHUNK_SIZE = 4 * 1024 * 1024;
+const CLOUD_ZEN_VERSION = "4.0.4";
 
 
 async function uploadFile(
@@ -6770,32 +6751,27 @@ async function uploadFile(
 function uploadChunkWithProgress(url, blob, onProgress, attempt = 1){
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
+        let settled = false;
+        const retry = () => {
+            if(attempt < 6){
+                const delay = Math.min(8000, 500 * Math.pow(2, attempt - 1)) + Math.floor(Math.random()*250);
+                setTimeout(() => uploadChunkWithProgress(url, blob, onProgress, attempt + 1).then(resolve, reject), delay);
+            }else reject(new Error("Network error during upload after multiple retries"));
+        };
         xhr.open("POST", url, true);
         xhr.withCredentials = true;
+        xhr.timeout = 180000;
         xhr.setRequestHeader("Content-Type", "application/octet-stream");
-        xhr.upload.onprogress = event => {
-            if(event.lengthComputable) onProgress(event.loaded);
-        };
-        xhr.onerror = () => {
-            if(attempt < 3){
-                setTimeout(() => uploadChunkWithProgress(url, blob, onProgress, attempt + 1).then(resolve, reject), 500 * attempt);
-            }else reject(new Error("Network error during upload"));
-        };
+        xhr.upload.onprogress = event => { if(event.lengthComputable) onProgress(event.loaded); };
+        xhr.onerror = retry;
+        xhr.ontimeout = retry;
         xhr.onabort = () => reject(new Error("Upload cancelled"));
         xhr.onload = () => {
-            let data = null;
-            try{ data = JSON.parse(xhr.responseText || "null"); }catch(_){}
+            let data = null; try{ data = JSON.parse(xhr.responseText || "null"); }catch(_){}
             if(xhr.status === 401){ showLogin(); reject(new Error("Session expired")); return; }
-            if(xhr.status >= 500 && attempt < 3){
-                setTimeout(() => uploadChunkWithProgress(url, blob, onProgress, attempt + 1).then(resolve, reject), 500 * attempt);
-                return;
-            }
-            if(xhr.status < 200 || xhr.status >= 300){
-                reject(new Error(data?.error || "Upload failed"));
-                return;
-            }
-            onProgress(blob.size);
-            resolve(data);
+            if((xhr.status >= 500 || xhr.status === 408 || xhr.status === 429) && attempt < 6){ retry(); return; }
+            if(xhr.status < 200 || xhr.status >= 300){ reject(new Error(data?.error || `Upload failed (${xhr.status})`)); return; }
+            if(!settled){ settled=true; onProgress(blob.size); resolve(data); }
         };
         xhr.send(blob);
     });
