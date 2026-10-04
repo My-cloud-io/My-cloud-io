@@ -4913,32 +4913,32 @@ downloadAllButton?.addEventListener(
    FILES
 ========================================================= */
 
-async function loadFiles(){
+async function loadFiles(options = {}){
 
-    fileList.innerHTML =
-        `
-        <div class="empty">
-            <div class="emptyIcon">☁</div>
-            Loading your cloud...
-        </div>
-        `;
-
+    const hasExisting = Array.isArray(allFiles) && allFiles.length > 0;
+    if(!hasExisting){
+        fileList.innerHTML =
+            `
+            <div class="empty">
+                <div class="emptyIcon">☁</div>
+                Loading your cloud...
+            </div>
+            `;
+    }
 
     try{
 
-        const files =
-            await api(
-                "/api/files"
-            );
+        const endpoint = options.refresh ? "/api/files?refresh=1" : "/api/files";
+        const files = await api(endpoint);
 
-
-        allFiles =
-            Array.isArray(files)
-                ? files
-                : [];
-
-
-        renderFiles();
+        if(Array.isArray(files)){
+            // Do not blank a healthy UI because a transient Telegram scan
+            // returned an empty list. The server remains the durable source.
+            if(files.length > 0 || allFiles.length === 0){
+                allFiles = files;
+                renderFiles();
+            }
+        }
 
     }catch(error){
 
@@ -5905,31 +5905,71 @@ function rememberRecent(
    SHARE
 ========================================================= */
 
-async function shareFile(file){
-    try{
-        const data = await api("/api/share", {
-            method:"POST",
-            headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({name:file.name, fileId:file.id, ttlSeconds:604800})
-        });
-        const url = new URL(data.url, window.location.origin).href;
-        const shareData = {
-            title: `Cloud-Zen v4.0.4 — ${file.name}`,
-            text: `Cloud-Zen v4.0.4 — ${file.name}`,
-            url
-        };
-        if(navigator.share){
-            try{ await navigator.share(shareData); return; }
-            catch(error){ if(error?.name === "AbortError") return; }
-        }
+async function shareFile(
+    file
+){
+
+    const url =
+        new URL(
+            streamUrl(
+                file.name,
+                file.id
+            ),
+            window.location.origin
+        ).href;
+
+
+    if(
+        navigator.share
+    ){
+
         try{
-            await navigator.clipboard.writeText(url);
-            showToast("Cloud-Zen share link copied");
-        }catch(_){ prompt("Cloud-Zen share link:", url); }
-    }catch(error){
-        showToast(error.message || "Could not create share link");
+
+            await navigator.share({
+
+                title:
+                    file.name,
+
+                text:
+                    `Shared from My Personal Cloud: ${file.name}`,
+
+                url
+            });
+
+            return;
+
+        }catch(error){
+
+            if(
+                error?.name ===
+                "AbortError"
+            ){
+
+                return;
+            }
+        }
+    }
+
+
+    try{
+
+        await navigator.clipboard.writeText(
+            url
+        );
+
+        showToast(
+            "File link copied"
+        );
+
+    }catch(_){
+
+        prompt(
+            "Copy this file link:",
+            url
+        );
     }
 }
+
 
 /* =========================================================
    PREVIEW
@@ -6595,8 +6635,8 @@ async function uploadFiles(
    CHUNK UPLOAD
 ========================================================= */
 
-const CHUNK_SIZE = 4 * 1024 * 1024;
-const CLOUD_ZEN_VERSION = "4.0.4";
+const CHUNK_SIZE =
+    4 * 1024 * 1024;
 
 
 async function uploadFile(
@@ -6717,6 +6757,32 @@ async function uploadFile(
     }
 
 
+    // Durable commit: ask Telegram-backed server storage to confirm that every
+    // chunk exists. This avoids losing the file when chunks hit different Vercel instances.
+    let committed = false;
+    let lastCommitError = "";
+    for(let attempt = 1; attempt <= 8 && !committed; attempt++){
+        try{
+            const result = await api("/api/upload/complete", {
+                method: "POST",
+                headers: {"Content-Type":"application/json"},
+                body: JSON.stringify({ id, name: file.name })
+            });
+            committed = Boolean(result?.complete);
+            if(committed && result.file){
+                const withoutOld = allFiles.filter(f => f.id !== result.file.id && f.name !== result.file.name);
+                allFiles = [...withoutOld, result.file];
+                renderFiles();
+            }
+        }catch(error){
+            lastCommitError = error.message || "Commit failed";
+            await new Promise(r => setTimeout(r, Math.min(1000 * attempt, 5000)));
+        }
+    }
+    if(!committed){
+        throw new Error(lastCommitError || "Upload reached 100% but Telegram has not finished committing the file yet. Please refresh and retry.");
+    }
+
     updateQueue(
         queue,
         100,
@@ -6751,27 +6817,32 @@ async function uploadFile(
 function uploadChunkWithProgress(url, blob, onProgress, attempt = 1){
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        let settled = false;
-        const retry = () => {
-            if(attempt < 6){
-                const delay = Math.min(8000, 500 * Math.pow(2, attempt - 1)) + Math.floor(Math.random()*250);
-                setTimeout(() => uploadChunkWithProgress(url, blob, onProgress, attempt + 1).then(resolve, reject), delay);
-            }else reject(new Error("Network error during upload after multiple retries"));
-        };
         xhr.open("POST", url, true);
         xhr.withCredentials = true;
-        xhr.timeout = 180000;
         xhr.setRequestHeader("Content-Type", "application/octet-stream");
-        xhr.upload.onprogress = event => { if(event.lengthComputable) onProgress(event.loaded); };
-        xhr.onerror = retry;
-        xhr.ontimeout = retry;
+        xhr.upload.onprogress = event => {
+            if(event.lengthComputable) onProgress(event.loaded);
+        };
+        xhr.onerror = () => {
+            if(attempt < 6){
+                setTimeout(() => uploadChunkWithProgress(url, blob, onProgress, attempt + 1).then(resolve, reject), 500 * attempt);
+            }else reject(new Error("Network error during upload"));
+        };
         xhr.onabort = () => reject(new Error("Upload cancelled"));
         xhr.onload = () => {
-            let data = null; try{ data = JSON.parse(xhr.responseText || "null"); }catch(_){}
+            let data = null;
+            try{ data = JSON.parse(xhr.responseText || "null"); }catch(_){}
             if(xhr.status === 401){ showLogin(); reject(new Error("Session expired")); return; }
-            if((xhr.status >= 500 || xhr.status === 408 || xhr.status === 429) && attempt < 6){ retry(); return; }
-            if(xhr.status < 200 || xhr.status >= 300){ reject(new Error(data?.error || `Upload failed (${xhr.status})`)); return; }
-            if(!settled){ settled=true; onProgress(blob.size); resolve(data); }
+            if(xhr.status >= 500 && attempt < 6){
+                setTimeout(() => uploadChunkWithProgress(url, blob, onProgress, attempt + 1).then(resolve, reject), 500 * attempt);
+                return;
+            }
+            if(xhr.status < 200 || xhr.status >= 300){
+                reject(new Error(data?.error || "Upload failed"));
+                return;
+            }
+            onProgress(blob.size);
+            resolve(data);
         };
         xhr.send(blob);
     });
