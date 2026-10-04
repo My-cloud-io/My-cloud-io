@@ -403,7 +403,7 @@ let fileIndex = new Map();
 let indexLoaded = false;
 let indexPromise = null;
 let indexLastRefresh = 0;
-const INDEX_TTL_MS = Math.max(5000, Number(process.env.INDEX_TTL_MS || 30000));
+const INDEX_TTL_MS = Math.max(1000, Number(process.env.INDEX_TTL_MS || 5000));
 
 async function rebuildIndex(force = false) {
   const now = Date.now();
@@ -521,7 +521,8 @@ app.get("/api/storage", requireAuth, async (req, res) => {
 app.get("/api/files", requireAuth, async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   try {
-    const index = await rebuildIndex();
+    const force = String(req.query?.refresh || "") === "1";
+    const index = await rebuildIndex(force);
     res.json([...index.values()].map(publicFile).sort((a, b) => a.name.localeCompare(b.name)));
   } catch (error) {
     console.error("FILE LIST ERROR:", error);
@@ -605,31 +606,19 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
       sha256
     });
 
-    // Vercel is stateless: another chunk may have reached a different instance.
-    // Rebuild from Telegram so the completed file becomes visible even when
-    // the upload requests are distributed across serverless instances.
-    let durableFile = null;
-    if (index === total - 1) {
-      try {
-        const durable = await rebuildIndex(true);
-        durableFile = durable.get(name);
-        if (durableFile && String(durableFile.id) !== String(id)) durableFile = null;
-      } catch (indexError) {
-        console.warn("UPLOAD INDEX REFRESH WARNING:", indexError.message);
-      }
-    }
-
     // Keep only metadata in memory; the durable copy is Telegram itself.
     try { await fsp.unlink(tmp); } catch (_) {}
 
-    const done = Boolean(durableFile) || state.size === total;
-    if (durableFile) {
-      fileIndex.set(name, durableFile);
-      indexLoaded = true;
-      indexLastRefresh = Date.now();
-      activeUploads.delete(uploadKey);
-    } else if (state.size === total) {
-      fileIndex.set(name, { id, name, size, total, chunks: new Map(state), modified: new Date().toISOString() });
+    const done = state.size === total;
+    if (done) {
+      fileIndex.set(name, {
+        id,
+        name,
+        size,
+        total,
+        chunks: new Map(state),
+        modified: new Date().toISOString()
+      });
       indexLoaded = true;
       indexLastRefresh = Date.now();
       activeUploads.delete(uploadKey);
@@ -648,6 +637,38 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
     try { await fsp.unlink(tmp); } catch (_) {}
     console.error("UPLOAD CHUNK ERROR:", error);
     return res.status(error?.statusCode || 500).json({ error: error.message || "Upload failed" });
+  }
+});
+
+/* =========================
+   UPLOAD COMPLETION / DURABLE COMMIT
+========================= */
+app.post("/api/upload/complete", requireAuth, requireUploadPassword, async (req, res) => {
+  const id = String(req.body?.id || "");
+  const name = cleanName(req.body?.name);
+  if (!/^[a-f0-9-]{20,80}$/i.test(id)) return res.status(400).json({ error: "Invalid upload ID" });
+
+  try {
+    // Telegram is the source of truth. Do not rely on this Vercel instance's
+    // in-memory activeUploads map, because another chunk may have landed on
+    // another serverless instance.
+    const fresh = await rebuildIndex(true);
+    let file = null;
+    for (const candidate of fresh.values()) {
+      if (String(candidate.id) === id && (!name || candidate.name === name)) {
+        file = candidate;
+        break;
+      }
+    }
+    if (!file) {
+      return res.status(409).json({ ok: false, complete: false, error: "Upload is still being committed. Please retry." });
+    }
+
+    activeUploads.delete(id);
+    return res.json({ ok: true, complete: true, file: publicFile(file) });
+  } catch (error) {
+    console.error("UPLOAD COMPLETE ERROR:", error);
+    return res.status(503).json({ ok: false, complete: false, error: error.message || "Could not commit upload" });
   }
 });
 
@@ -719,7 +740,7 @@ async function streamFileToResponse(req, res, meta, inline) {
   let end = totalSize - 1;
   let partial = false;
 
-  const rangeMatch = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
+  const rangeMatch = rangeHeader.match(/^bytes=(\\d*)-(\\d*)$/);
   if (rangeMatch) {
     if (rangeMatch[1] !== "") start = Number(rangeMatch[1]);
     if (rangeMatch[2] !== "") end = Number(rangeMatch[2]);
@@ -899,17 +920,19 @@ app.patch("/api/files", requireAuth, async (req, res) => {
 });
 
 app.post("/api/files/rename", requireAuth, async (req, res) => {
+  // Mobile frontend compatibility: use the same rename implementation as PATCH /api/files.
+  const oldName = cleanName(req.body?.name);
+  const newName = cleanName(req.body?.newName || req.body?.new_name);
+  if (!oldName || !newName) return res.status(400).json({ error: "Current and new file names are required" });
+  if (oldName === newName) return res.json({ ok: true, file: publicFile((await findFile(oldName, String(req.body?.fileId || "")))) });
   try {
-    const oldName = cleanName(req.body?.name);
-    const newName = cleanName(req.body?.newName || req.body?.new_name);
-    const fileId = String(req.body?.fileId || "");
-    if (!oldName || !newName || oldName === newName) return res.status(400).json({ error: "Enter a different file name." });
-    const file = await findFile(oldName, fileId);
+    const file = await findFile(oldName, String(req.body?.fileId || ""));
     if (!file) return res.status(404).json({ error: "File not found" });
-    if (fileIndex.has(newName)) return res.status(409).json({ error: "A file with that name already exists." });
+    const index = await rebuildIndex();
+    if (index.has(newName)) return res.status(409).json({ error: "A file with that name already exists." });
     const client = await getTelegramClient();
-    const newChunks = new Map();
     const tempDir = path.join(TMP_DIR, `rename-${crypto.randomUUID()}`);
+    const newChunks = new Map();
     await fsp.mkdir(tempDir, { recursive: true });
     try {
       for (let i = 0; i < file.total; i += 1) {
@@ -927,11 +950,15 @@ app.post("/api/files/rename", requireAuth, async (req, res) => {
       if (oldIds.length) await deleteTelegramMessages(oldIds);
     } finally { await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {}); }
     const renamed = { ...file, name: newName, chunks: newChunks, modified: new Date().toISOString() };
-    fileIndex.delete(file.name);
+    fileIndex.delete(oldName);
     fileIndex.set(newName, renamed);
-    indexLoaded = true; indexLastRefresh = Date.now();
-    res.json({ ok: true, file: publicFile(renamed) });
-  } catch (error) { console.error("RENAME ERROR:", error); res.status(500).json({ error: error.message || "Rename failed" }); }
+    indexLoaded = true;
+    indexLastRefresh = Date.now();
+    return res.json({ ok: true, file: publicFile(renamed) });
+  } catch (error) {
+    console.error("RENAME ERROR:", error);
+    return res.status(500).json({ error: error.message || "Rename failed" });
+  }
 });
 
 app.post("/api/share", requireAuth, async (req, res) => {
@@ -939,9 +966,9 @@ app.post("/api/share", requireAuth, async (req, res) => {
     const name = cleanName(req.body?.name);
     const file = await findFile(name, String(req.query?.fileId || ""));
     if (!file) return res.status(404).json({ error: "File not found" });
-    const token = createShareToken(name, file.id, req.body?.ttlSeconds || 86400);
+    const token = createShareToken(file.name, file.id, req.body?.ttlSeconds || 86400);
     const base = `${req.protocol}://${req.get("host")}`;
-    res.json({ ok: true, url: `${base}/s/${encodeURIComponent(token)}`, expiresIn: 86400, name: file.name });
+    res.json({ ok: true, url: `${base}/s/${encodeURIComponent(token)}`, expiresIn: 86400, name: file.name, version: "Cloud-Zen v4.0.5" });
   } catch (error) {
     res.status(500).json({ error: error.message || "Could not create share link" });
   }
@@ -980,11 +1007,11 @@ app.get(/^\/s\/([^/]+)$/, async (req, res) => {
     const token = decodeURIComponent(req.params[0]);
     const data = verifyShareToken(token);
     if (!data) return res.status(410).send("This share link has expired or is invalid.");
-    const file = await findFile(data.n, String(data.id || ""));
+    const file = await findFile(data.n, data.id || "");
     if (!file) return res.status(404).send("File not found");
     const safeName = file.name.replace(/[<>]/g, "");
     const payload = JSON.stringify({ name: safeName, size: file.size, type: mimeFor(file.name), url: `/api/shared-stream/${encodeURIComponent(token)}`, token }).replace(/</g, "\\u003c");
-    res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070b14"><title>Cloud-Zen v4.0.4 — ${safeName}</title><style>body{margin:0;background:#070b14;color:#eef2ff;font-family:system-ui;display:grid;place-items:center;min-height:100vh;padding:24px;box-sizing:border-box}.card{width:min(920px,100%);padding:28px;border:1px solid #ffffff18;border-radius:28px;background:#ffffff08;backdrop-filter:blur(18px);box-shadow:0 30px 90px #0008}h1{font-size:clamp(20px,4vw,34px);margin:0 0 8px;word-break:break-word}.meta{color:#9aa7bf;margin-bottom:22px}video,audio,img,iframe{width:100%;max-height:70vh;border-radius:18px;background:#000;object-fit:contain}.btn{display:inline-flex;margin-top:18px;padding:12px 16px;border-radius:12px;background:#fff;color:#07101e;text-decoration:none;font-weight:750;border:0;cursor:pointer}.shade{position:fixed;inset:0;background:#0009;backdrop-filter:blur(10px);display:none;place-items:center;padding:18px}.box{width:min(420px,100%);background:#101a2b;border:1px solid #ffffff18;border-radius:22px;padding:24px;box-shadow:0 30px 100px #000}.box h2{margin:0 0 7px}.box p{color:#9aa7bf;font-size:13px}.box input{width:100%;height:46px;box-sizing:border-box;border-radius:12px;border:1px solid #ffffff18;background:#091321;color:#fff;padding:0 12px;margin:8px 0 12px}.err{color:#ffb5c0;font-size:12px;min-height:18px}</style></head><body><main class="card"><div style="font-weight:800;letter-spacing:.08em;color:#b8c7ff;font-size:12px;margin-bottom:8px">CLOUD-ZEN v4.0.4</div><h1>${safeName}</h1><div class="meta">${formatBytes(file.size)} Â· ${mimeFor(file.name)}</div><div id="viewer"></div><a class="btn" id="downloadBtn" href="/s/${encodeURIComponent(token)}/download">Download file</a></main><div class="shade" id="shade"><div class="box"><h2>Secure download</h2><p>Enter the download security password to continue.</p><input id="pw" type="password" autocomplete="off" placeholder="Security password"><div class="err" id="err"></div><button class="btn" id="unlock">Unlock & download</button></div></div><script>const f=${payload},v=document.getElementById('viewer'),u=f.url;if(f.type.startsWith('image/'))v.innerHTML='<img src="'+u+'">';else if(f.type.startsWith('video/'))v.innerHTML='<video src="'+u+'" controls playsinline preload="metadata"></video>';else if(f.type.startsWith('audio/'))v.innerHTML='<audio src="'+u+'" controls preload="metadata"></audio>';else if(f.type==='application/pdf'||f.type.startsWith('text/'))v.innerHTML='<iframe src="'+u+'" style="height:70vh"></iframe>';else v.innerHTML='<p style="color:#9aa7bf">Preview is not available for this file type.</p>';</script></body></html>`);
+    res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070b14"><title>${safeName}</title><style>body{margin:0;background:#070b14;color:#eef2ff;font-family:system-ui;display:grid;place-items:center;min-height:100vh;padding:24px;box-sizing:border-box}.card{width:min(920px,100%);padding:28px;border:1px solid #ffffff18;border-radius:28px;background:#ffffff08;backdrop-filter:blur(18px);box-shadow:0 30px 90px #0008}h1{font-size:clamp(20px,4vw,34px);margin:0 0 8px;word-break:break-word}.meta{color:#9aa7bf;margin-bottom:22px}video,audio,img,iframe{width:100%;max-height:70vh;border-radius:18px;background:#000;object-fit:contain}.btn{display:inline-flex;margin-top:18px;padding:12px 16px;border-radius:12px;background:#fff;color:#07101e;text-decoration:none;font-weight:750;border:0;cursor:pointer}.shade{position:fixed;inset:0;background:#0009;backdrop-filter:blur(10px);display:none;place-items:center;padding:18px}.box{width:min(420px,100%);background:#101a2b;border:1px solid #ffffff18;border-radius:22px;padding:24px;box-shadow:0 30px 100px #000}.box h2{margin:0 0 7px}.box p{color:#9aa7bf;font-size:13px}.box input{width:100%;height:46px;box-sizing:border-box;border-radius:12px;border:1px solid #ffffff18;background:#091321;color:#fff;padding:0 12px;margin:8px 0 12px}.err{color:#ffb5c0;font-size:12px;min-height:18px}</style></head><body><main class="card"><h1>${safeName}</h1><div class="meta">${formatBytes(file.size)} Â· ${mimeFor(file.name)}</div><div id="viewer"></div><button class="btn" id="downloadBtn">Download file</button></main><div class="shade" id="shade"><div class="box"><h2>Secure download</h2><p>Enter the download security password to continue.</p><input id="pw" type="password" autocomplete="off" placeholder="Security password"><div class="err" id="err"></div><button class="btn" id="unlock">Unlock & download</button></div></div><script>const f=${payload},v=document.getElementById('viewer'),u=f.url;if(f.type.startsWith('image/'))v.innerHTML='<img src="'+u+'">';else if(f.type.startsWith('video/'))v.innerHTML='<video src="'+u+'" controls playsinline preload="metadata"></video>';else if(f.type.startsWith('audio/'))v.innerHTML='<audio src="'+u+'" controls preload="metadata"></audio>';else if(f.type==='application/pdf'||f.type.startsWith('text/'))v.innerHTML='<iframe src="'+u+'" style="height:70vh"></iframe>';else v.innerHTML='<p style="color:#9aa7bf">Preview is not available for this file type.</p>';const sh=document.getElementById('shade');document.getElementById('downloadBtn').onclick=()=>sh.style.display='grid';document.getElementById('unlock').onclick=async()=>{const err=document.getElementById('err'),b=document.getElementById('unlock');b.disabled=true;b.textContent='Checkingâ€¦';err.textContent='';try{const r=await fetch('/api/shared-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:f.token,password:document.getElementById('pw').value})});const d=await r.json();if(!r.ok)throw Error(d.error||'Access denied');location.href='/s/'+encodeURIComponent(f.token)+'/download'}catch(e){err.textContent=e.message;b.disabled=false;b.textContent='Unlock & download'}};</script></body></html>`);
   } catch (error) { res.status(500).send(error.message || "Share page failed"); }
 });
 
@@ -993,7 +1020,7 @@ app.get(/^\/api\/shared-stream\/(.+)$/, async (req, res) => {
     const token = decodeURIComponent(req.params[0]);
     const data = verifyShareToken(token);
     if (!data) return res.status(410).send("Share link expired");
-    const file = await findFile(data.n, String(data.id || ""));
+    const file = await findFile(data.n, data.id || "");
     if (!file) return res.status(404).send("File not found");
     await streamFileToResponse(req, res, file, true);
   } catch (error) {
@@ -1006,7 +1033,8 @@ app.get(/^\/s\/([^/]+)\/download$/, async (req, res) => {
     const token = decodeURIComponent(req.params[0]);
     const data = verifyShareToken(token);
     if (!data) return res.status(410).send("Share link expired");
-    const file = await findFile(data.n, String(data.id || ""));
+    if (!validSharedDownload(token, req)) return res.status(403).send("Download access requires the security password.");
+    const file = await findFile(data.n, data.id || "");
     if (!file) return res.status(404).send("File not found");
     await streamFileToResponse(req, res, file, false);
   } catch (error) {
