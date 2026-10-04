@@ -845,23 +845,35 @@ function safeTokenPayload(payload) {
   return b64url(JSON.stringify(payload));
 }
 
-function createShareToken(name, ttlSeconds = 86400, fileId = "") {
-  const exp = Math.floor(Date.now() / 1000) + Math.max(300, Math.min(Number(ttlSeconds) || 86400, 7 * 86400));
+function shareSignature(payload) {
+  if (!SESSION_SECRET) throw new Error("SESSION_SECRET is not configured.");
+  return crypto.createHmac("sha256", SESSION_SECRET).update(String(payload)).digest("base64url");
+}
+
+function createShareToken(name, ttlSeconds = 7 * 86400, fileId = "") {
+  const requested = Number(ttlSeconds);
+  const ttl = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 30 * 86400) : 7 * 86400;
+  const exp = Math.floor(Date.now() / 1000) + Math.max(300, ttl);
   const payload = safeTokenPayload({ n: cleanName(name), id: String(fileId || ""), exp, nonce: crypto.randomBytes(8).toString("hex") });
-  return `${payload}.${signPayload(payload)}`;
+  return `${payload}.${shareSignature(payload)}`;
 }
 
 function verifyShareToken(token) {
-  const [payload, signature] = String(token || "").split(".");
-  if (!payload || !signature || !safeEqual(signature, signPayload(payload))) return null;
+  const parts = String(token || "").split(".");
+  if (parts.length !== 2) return null;
+  const [payload, signature] = parts;
+  if (!payload || !signature) return null;
+  let expected;
+  try { expected = shareSignature(payload); } catch (_) { return null; }
+  if (!safeEqual(signature, expected)) return null;
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (!data?.n || !Number.isFinite(data.exp) || data.exp < Math.floor(Date.now() / 1000)) return null;
+    if (!data?.n || !Number.isFinite(Number(data.exp)) || Number(data.exp) < Math.floor(Date.now() / 1000)) return null;
     return data;
   } catch (_) { return null; }
 }
 
-app.patch("/api/files", requireAuth, async (req, res) => {
+async function renameFileHandler(req, res) {
   try {
     const oldName = cleanName(req.body?.name);
     const newName = cleanName(req.body?.newName);
@@ -917,7 +929,10 @@ app.patch("/api/files", requireAuth, async (req, res) => {
     console.error("RENAME ERROR:", error);
     return res.status(500).json({ error: error.message || "Rename failed" });
   }
-});
+}
+
+app.patch("/api/files", requireAuth, renameFileHandler);
+app.post("/api/files/rename", requireAuth, renameFileHandler);
 
 app.post("/api/share", requireAuth, async (req, res) => {
   try {
@@ -925,9 +940,11 @@ app.post("/api/share", requireAuth, async (req, res) => {
     const fileId = String(req.body?.fileId || req.query?.fileId || "");
     const file = await findFile(name, fileId);
     if (!file) return res.status(404).json({ error: "File not found" });
-    const token = createShareToken(name, req.body?.ttlSeconds || 86400, file.id);
+    const ttlSeconds = Number(req.body?.ttlSeconds) || 7 * 86400;
+    const token = createShareToken(name, ttlSeconds, file.id);
     const base = `${req.protocol}://${req.get("host")}`;
-    res.json({ ok: true, url: `${base}/s/${encodeURIComponent(token)}`, expiresIn: 86400, name: file.name });
+    const expiresIn = Math.max(300, Math.min(ttlSeconds, 30 * 86400));
+    res.json({ ok: true, url: `${base}/s/${encodeURIComponent(token)}`, expiresIn, name: file.name, fileId: file.id });
   } catch (error) {
     res.status(500).json({ error: error.message || "Could not create share link" });
   }
