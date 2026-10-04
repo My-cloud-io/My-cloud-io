@@ -4913,32 +4913,32 @@ downloadAllButton?.addEventListener(
    FILES
 ========================================================= */
 
-async function loadFiles(options = {}){
+async function loadFiles(){
 
-    const hasExisting = Array.isArray(allFiles) && allFiles.length > 0;
-    if(!hasExisting){
-        fileList.innerHTML =
-            `
-            <div class="empty">
-                <div class="emptyIcon">☁</div>
-                Loading your cloud...
-            </div>
-            `;
-    }
+    fileList.innerHTML =
+        `
+        <div class="empty">
+            <div class="emptyIcon">☁</div>
+            Loading your cloud...
+        </div>
+        `;
+
 
     try{
 
-        const endpoint = options.refresh ? "/api/files?refresh=1" : "/api/files";
-        const files = await api(endpoint);
+        const files =
+            await api(
+                "/api/files"
+            );
 
-        if(Array.isArray(files)){
-            // Do not blank a healthy UI because a transient Telegram scan
-            // returned an empty list. The server remains the durable source.
-            if(files.length > 0 || allFiles.length === 0){
-                allFiles = files;
-                renderFiles();
-            }
-        }
+
+        allFiles =
+            Array.isArray(files)
+                ? files
+                : [];
+
+
+        renderFiles();
 
     }catch(error){
 
@@ -5744,10 +5744,10 @@ function createFileCard(
         const trimmed = next.trim();
         if(!trimmed || trimmed === current) return;
         try{
-            await api("/api/files/rename", {
+            await api(`/api/files/${encodeURIComponent(file.id)}/rename`, {
                 method:"POST",
                 headers:{"Content-Type":"application/json"},
-                body: JSON.stringify({ name:file.name, newName:trimmed, fileId:file.id })
+                body: JSON.stringify({ name:trimmed })
             });
             showToast("File renamed");
             await loadEverything();
@@ -5908,70 +5908,40 @@ function rememberRecent(
 async function shareFile(
     file
 ){
+    try{
+        const response = await api("/api/share", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({ id:file.id, name:file.name })
+        });
+        const url = response?.url;
+        if(!url) throw new Error("Share link could not be created");
 
-    const url =
-        new URL(
-            streamUrl(
-                file.name,
-                file.id
-            ),
-            window.location.origin
-        ).href;
-
-
-    if(
-        navigator.share
-    ){
-
-        try{
-
-            await navigator.share({
-
-                title:
-                    file.name,
-
-                text:
-                    `Shared from My Personal Cloud: ${file.name}`,
-
-                url
-            });
-
-            return;
-
-        }catch(error){
-
-            if(
-                error?.name ===
-                "AbortError"
-            ){
-
+        if(navigator.share){
+            try{
+                await navigator.share({
+                    title:file.name,
+                    text:`Shared from My Personal Cloud: ${file.name}`,
+                    url
+                });
                 return;
+            }catch(error){
+                if(error?.name === "AbortError") return;
             }
         }
-    }
 
-
-    try{
-
-        await navigator.clipboard.writeText(
-            url
-        );
-
-        showToast(
-            "File link copied"
-        );
-
-    }catch(_){
-
-        prompt(
-            "Copy this file link:",
-            url
-        );
+        try{
+            await navigator.clipboard.writeText(url);
+            showToast("File link copied");
+        }catch(_){
+            prompt("Copy this file link:", url);
+        }
+    }catch(error){
+        alert(error.message || "Share failed");
     }
 }
 
 
-/* =========================================================
    PREVIEW
 ========================================================= */
 
@@ -6436,11 +6406,11 @@ async function deleteFile(
         if(deletePassword === null) return;
 
         await api(
-            "/api/files",
+            `/api/files/${encodeURIComponent((allFiles.find(f => f.name === name) || {}).id || "")}`,
             {
                 method:"DELETE",
-                headers:{"Content-Type":"application/json"},
-                body: JSON.stringify({ name, deletePassword })
+                headers:{"Content-Type":"application/json","X-Delete-Password":deletePassword},
+                body: JSON.stringify({ password:deletePassword })
             }
         );
 
@@ -6757,32 +6727,6 @@ async function uploadFile(
     }
 
 
-    // Durable commit: ask Telegram-backed server storage to confirm that every
-    // chunk exists. This avoids losing the file when chunks hit different Vercel instances.
-    let committed = false;
-    let lastCommitError = "";
-    for(let attempt = 1; attempt <= 8 && !committed; attempt++){
-        try{
-            const result = await api("/api/upload/complete", {
-                method: "POST",
-                headers: {"Content-Type":"application/json"},
-                body: JSON.stringify({ id, name: file.name })
-            });
-            committed = Boolean(result?.complete);
-            if(committed && result.file){
-                const withoutOld = allFiles.filter(f => f.id !== result.file.id && f.name !== result.file.name);
-                allFiles = [...withoutOld, result.file];
-                renderFiles();
-            }
-        }catch(error){
-            lastCommitError = error.message || "Commit failed";
-            await new Promise(r => setTimeout(r, Math.min(1000 * attempt, 5000)));
-        }
-    }
-    if(!committed){
-        throw new Error(lastCommitError || "Upload reached 100% but Telegram has not finished committing the file yet. Please refresh and retry.");
-    }
-
     updateQueue(
         queue,
         100,
@@ -6824,7 +6768,7 @@ function uploadChunkWithProgress(url, blob, onProgress, attempt = 1){
             if(event.lengthComputable) onProgress(event.loaded);
         };
         xhr.onerror = () => {
-            if(attempt < 6){
+            if(attempt < 3){
                 setTimeout(() => uploadChunkWithProgress(url, blob, onProgress, attempt + 1).then(resolve, reject), 500 * attempt);
             }else reject(new Error("Network error during upload"));
         };
@@ -6833,7 +6777,7 @@ function uploadChunkWithProgress(url, blob, onProgress, attempt = 1){
             let data = null;
             try{ data = JSON.parse(xhr.responseText || "null"); }catch(_){}
             if(xhr.status === 401){ showLogin(); reject(new Error("Session expired")); return; }
-            if(xhr.status >= 500 && attempt < 6){
+            if(xhr.status >= 500 && attempt < 3){
                 setTimeout(() => uploadChunkWithProgress(url, blob, onProgress, attempt + 1).then(resolve, reject), 500 * attempt);
                 return;
             }
