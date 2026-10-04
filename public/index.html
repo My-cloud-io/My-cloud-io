@@ -5747,8 +5747,8 @@ function createFileCard(
         const trimmed = next.trim();
         if(!trimmed || trimmed === current) return;
         try{
-            await api("/api/files", {
-                method:"PATCH",
+            await api("/api/files/rename", {
+                method:"POST",
                 headers:{"Content-Type":"application/json"},
                 body: JSON.stringify({ name:file.name, newName:trimmed, fileId:file.id })
             });
@@ -5919,7 +5919,7 @@ async function shareFile(
             body:JSON.stringify({
                 name:file.name,
                 fileId:file.id,
-                ttlSeconds:86400
+                ttlSeconds:604800
             })
         });
 
