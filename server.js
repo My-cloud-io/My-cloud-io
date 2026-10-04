@@ -47,7 +47,6 @@ const TELEGRAM_STORAGE_CHAT = String(process.env.TELEGRAM_STORAGE_CHAT || "me").
 
 const CHUNK_SIZE = 4 * 1024 * 1024;
 const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE || 20 * 1024 * 1024 * 1024 * 1024);
-const STORAGE_LIMIT_BYTES = Number(process.env.STORAGE_LIMIT_BYTES || 10 * 1024 * 1024 * 1024);
 const MAX_CHUNKS = 100000;
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_LOCK_MS = 24 * 60 * 60 * 1000;
@@ -339,7 +338,7 @@ app.post("/api/auth/logout", (req, res) => {
    UTILS
 ========================= */
 function cleanName(value) {
-  return path.basename(String(value || "file")).replace(/[\u0000]/g, "").trim().slice(0, 240) || "file";
+  return path.basename(String(value || "file")).replace(/[\\u0000]/g, "").trim().slice(0, 240) || "file";
 }
 
 function formatBytes(bytes) {
@@ -419,23 +418,19 @@ async function rebuildIndex(force = false) {
     // marker are considered storage records.
     for await (const message of client.iterMessages(TELEGRAM_STORAGE_CHAT, { limit: 0 })) {
       const parsed = parseChunkCaption(message?.message || message?.text || "");
-      if (!parsed || !parsed.id || !Number.isInteger(parsed.index) || parsed.index < 0) continue;
-      if (!Number.isInteger(parsed.total) || parsed.total < 1 || parsed.index >= parsed.total) continue;
-      if (!Number.isSafeInteger(parsed.size) || parsed.size <= 0) continue;
+      if (!parsed || !Number.isInteger(parsed.index) || parsed.index < 0) continue;
       if (!message.id) continue;
-      if (!grouped.has(parsed.id)) grouped.set(parsed.id, { ...parsed, chunks: new Map(), complete: false, modified: null });
+      if (!grouped.has(parsed.id)) grouped.set(parsed.id, { ...parsed, chunks: new Map(), complete: false });
       const entry = grouped.get(parsed.id);
       entry.chunks.set(parsed.index, {
         messageId: Number(message.id),
         index: parsed.index,
-        size: parsed.index === parsed.total - 1 ? parsed.size - (parsed.total - 1) * CHUNK_SIZE : CHUNK_SIZE,
+        size: parsed.size,
         sha256: parsed.sha256
       });
       entry.name = parsed.name;
       entry.total = parsed.total;
       entry.size = parsed.size;
-      const messageDate = message?.date instanceof Date ? message.date.toISOString() : (message?.date ? new Date(message.date).toISOString() : null);
-      if (messageDate && (!entry.modified || messageDate > entry.modified)) entry.modified = messageDate;
     }
 
     const next = new Map();
@@ -445,26 +440,14 @@ async function rebuildIndex(force = false) {
         let totalBytes = 0;
         for (const chunk of entry.chunks.values()) totalBytes += Number(chunk.size || 0);
         if (totalBytes === entry.size) {
-          // Reconstruct each chunk's real byte length from the file size.
-          const chunks = new Map();
-          for (let i = 0; i < entry.total; i += 1) {
-            const chunk = entry.chunks.get(i);
-            if (!chunk) { chunks.clear(); break; }
-            chunks.set(i, {
-              ...chunk,
-              size: Math.min(CHUNK_SIZE, entry.size - i * CHUNK_SIZE)
-            });
-          }
-          if (chunks.size === entry.total) {
-            next.set(entry.name, {
-              id,
-              name: entry.name,
-              size: entry.size,
-              total: entry.total,
-              chunks,
-              modified: entry.modified || null
-            });
-          }
+          next.set(entry.name, {
+            id,
+            name: entry.name,
+            size: entry.size,
+            total: entry.total,
+            chunks: entry.chunks,
+            modified: null
+          });
         }
       }
     }
@@ -519,17 +502,13 @@ app.get("/api/storage", requireAuth, async (req, res) => {
     for (const file of index.values()) used += Number(file.size || 0);
     // Telegram's overall cloud storage is not exposed as a numeric quota by
     // the API, so the UI intentionally reports logical usage, not a fake quota.
-    const remaining = Math.max(0, STORAGE_LIMIT_BYTES - used);
-    const usedPercent = STORAGE_LIMIT_BYTES > 0 ? Math.min(100, (used / STORAGE_LIMIT_BYTES) * 100) : 0;
     res.json({
       usedBytes: used,
       usedText: formatBytes(used),
-      remainingBytes: remaining,
-      remainingText: formatBytes(remaining),
-      usedPercent: Number(usedPercent.toFixed(1)),
-      limitBytes: STORAGE_LIMIT_BYTES,
-      limitText: formatBytes(STORAGE_LIMIT_BYTES),
-      fileCount: index.size
+      remainingBytes: null,
+      remainingText: "Available",
+      usedPercent: 0,
+      limitText: "Private Cloud"
     });
   } catch (error) {
     res.status(503).json({ error: error.message });
@@ -626,19 +605,31 @@ app.post("/api/upload-chunk", requireAuth, requireUploadPassword, async (req, re
       sha256
     });
 
+    // Vercel is stateless: another chunk may have reached a different instance.
+    // Rebuild from Telegram so the completed file becomes visible even when
+    // the upload requests are distributed across serverless instances.
+    let durableFile = null;
+    if (index === total - 1) {
+      try {
+        const durable = await rebuildIndex(true);
+        durableFile = durable.get(name);
+        if (durableFile && String(durableFile.id) !== String(id)) durableFile = null;
+      } catch (indexError) {
+        console.warn("UPLOAD INDEX REFRESH WARNING:", indexError.message);
+      }
+    }
+
     // Keep only metadata in memory; the durable copy is Telegram itself.
     try { await fsp.unlink(tmp); } catch (_) {}
 
-    const done = state.size === total;
-    if (done) {
-      fileIndex.set(name, {
-        id,
-        name,
-        size,
-        total,
-        chunks: new Map(state),
-        modified: new Date().toISOString()
-      });
+    const done = Boolean(durableFile) || state.size === total;
+    if (durableFile) {
+      fileIndex.set(name, durableFile);
+      indexLoaded = true;
+      indexLastRefresh = Date.now();
+      activeUploads.delete(uploadKey);
+    } else if (state.size === total) {
+      fileIndex.set(name, { id, name, size, total, chunks: new Map(state), modified: new Date().toISOString() });
       indexLoaded = true;
       indexLastRefresh = Date.now();
       activeUploads.delete(uploadKey);
@@ -684,30 +675,22 @@ app.delete("/api/upload/:id", requireAuth, requireUploadPassword, async (req, re
 ========================= */
 async function findFile(name, fileId = "") {
   const clean = cleanName(name);
-  let index = await rebuildIndex();
-
-  // ID is the durable primary key. This is important on Vercel where a
-  // request after reload can land on a different server instance.
+  const index = await rebuildIndex();
   if (fileId) {
-    const wanted = String(fileId);
     for (const meta of index.values()) {
-      if (String(meta.id) === wanted) return meta;
+      if (String(meta.id) === String(fileId)) return meta;
     }
   }
-
   const direct = index.get(clean);
   if (direct) return direct;
-
-  // Uploads/renames may have happened on another instance. Always allow one
-  // fresh Telegram rebuild before declaring a file missing.
-  index = await rebuildIndex(true);
+  // A fresh Telegram scan avoids serving a stale per-instance index after an upload/rename.
+  const fresh = await rebuildIndex(true);
   if (fileId) {
-    const wanted = String(fileId);
-    for (const meta of index.values()) {
-      if (String(meta.id) === wanted) return meta;
+    for (const meta of fresh.values()) {
+      if (String(meta.id) === String(fileId)) return meta;
     }
   }
-  return index.get(clean) || null;
+  return fresh.get(clean) || null;
 }
 
 async function deleteTelegramMessages(ids) {
@@ -811,27 +794,25 @@ function requireStreamAuth(req, res, next) {
   return res.status(401).send("Authentication required");
 }
 
-app.get("/api/stream/:name", requireStreamAuth, async (req, res) => {
+app.get(/^\/api\/stream\/(.+)$/, requireStreamAuth, async (req, res) => {
   try {
-    const name = cleanName(decodeURIComponent(req.params.name || ""));
+    const name = decodeURIComponent(req.params[0]);
     const file = await findFile(name, String(req.query?.fileId || ""));
     if (!file) return res.status(404).send("File not found");
     await streamFileToResponse(req, res, file, true);
   } catch (error) {
-    console.error("STREAM ROUTE ERROR:", error);
     if (!res.headersSent) res.status(500).send(error.message || "File not found");
     else res.destroy(error);
   }
 });
 
-app.get("/api/download/:name", requireAuth, requireDownloadPassword, async (req, res) => {
+app.get(/^\/api\/download\/(.+)$/, requireAuth, requireDownloadPassword, async (req, res) => {
   try {
-    const name = cleanName(decodeURIComponent(req.params.name || ""));
+    const name = decodeURIComponent(req.params[0]);
     const file = await findFile(name, String(req.query?.fileId || ""));
     if (!file) return res.status(404).send("File not found");
     await streamFileToResponse(req, res, file, false);
   } catch (error) {
-    console.error("DOWNLOAD ROUTE ERROR:", error);
     if (!res.headersSent) res.status(500).send(error.message || "Download failed");
     else res.destroy(error);
   }
@@ -845,43 +826,29 @@ function safeTokenPayload(payload) {
   return b64url(JSON.stringify(payload));
 }
 
-function shareSignature(payload) {
-  if (!SESSION_SECRET) throw new Error("SESSION_SECRET is not configured.");
-  return crypto.createHmac("sha256", SESSION_SECRET).update(String(payload)).digest("base64url");
-}
-
-function createShareToken(name, ttlSeconds = 7 * 86400, fileId = "") {
-  const requested = Number(ttlSeconds);
-  const ttl = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 30 * 86400) : 7 * 86400;
-  const exp = Math.floor(Date.now() / 1000) + Math.max(300, ttl);
+function createShareToken(name, fileId = "", ttlSeconds = 86400) {
+  const exp = Math.floor(Date.now() / 1000) + Math.max(300, Math.min(Number(ttlSeconds) || 86400, 7 * 86400));
   const payload = safeTokenPayload({ n: cleanName(name), id: String(fileId || ""), exp, nonce: crypto.randomBytes(8).toString("hex") });
-  return `${payload}.${shareSignature(payload)}`;
+  return `${payload}.${signPayload(payload)}`;
 }
 
 function verifyShareToken(token) {
-  const parts = String(token || "").split(".");
-  if (parts.length !== 2) return null;
-  const [payload, signature] = parts;
-  if (!payload || !signature) return null;
-  let expected;
-  try { expected = shareSignature(payload); } catch (_) { return null; }
-  if (!safeEqual(signature, expected)) return null;
+  const [payload, signature] = String(token || "").split(".");
+  if (!payload || !signature || !safeEqual(signature, signPayload(payload))) return null;
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (!data?.n || !Number.isFinite(Number(data.exp)) || Number(data.exp) < Math.floor(Date.now() / 1000)) return null;
+    if (!data?.n || !Number.isFinite(data.exp) || data.exp < Math.floor(Date.now() / 1000)) return null;
     return data;
   } catch (_) { return null; }
 }
 
-async function renameFileHandler(req, res) {
+app.patch("/api/files", requireAuth, async (req, res) => {
   try {
     const oldName = cleanName(req.body?.name);
     const newName = cleanName(req.body?.newName);
-    const fileId = String(req.body?.fileId || "");
     if (!oldName || !newName || oldName === newName) return res.status(400).json({ error: "Enter a different file name." });
-    const file = await findFile(oldName, fileId);
+    const file = await findFile(oldName);
     if (!file) return res.status(404).json({ error: "File not found" });
-    await rebuildIndex();
     if (fileIndex.has(newName)) return res.status(409).json({ error: "A file with that name already exists." });
 
     const client = await getTelegramClient();
@@ -929,22 +896,52 @@ async function renameFileHandler(req, res) {
     console.error("RENAME ERROR:", error);
     return res.status(500).json({ error: error.message || "Rename failed" });
   }
-}
+});
 
-app.patch("/api/files", requireAuth, renameFileHandler);
-app.post("/api/files/rename", requireAuth, renameFileHandler);
+app.post("/api/files/rename", requireAuth, async (req, res) => {
+  try {
+    const oldName = cleanName(req.body?.name);
+    const newName = cleanName(req.body?.newName || req.body?.new_name);
+    const fileId = String(req.body?.fileId || "");
+    if (!oldName || !newName || oldName === newName) return res.status(400).json({ error: "Enter a different file name." });
+    const file = await findFile(oldName, fileId);
+    if (!file) return res.status(404).json({ error: "File not found" });
+    if (fileIndex.has(newName)) return res.status(409).json({ error: "A file with that name already exists." });
+    const client = await getTelegramClient();
+    const newChunks = new Map();
+    const tempDir = path.join(TMP_DIR, `rename-${crypto.randomUUID()}`);
+    await fsp.mkdir(tempDir, { recursive: true });
+    try {
+      for (let i = 0; i < file.total; i += 1) {
+        const oldChunk = file.chunks.get(i);
+        if (!oldChunk) throw new Error(`Stored chunk ${i + 1} not found`);
+        const chunkDir = path.join(tempDir, String(i));
+        await fsp.mkdir(chunkDir, { recursive: true });
+        const target = path.join(chunkDir, newName);
+        await downloadChunkToFile(oldChunk.messageId, target);
+        const caption = captionFor({ ...file, name: newName }, i, oldChunk.sha256);
+        const message = await client.sendFile(TELEGRAM_STORAGE_CHAT, { file: target, caption, forceDocument: true, workers: Math.max(1, Math.min(Number(process.env.TELEGRAM_WORKERS || 8), 16)), progressCallback: () => {} });
+        newChunks.set(i, { messageId: Number(message?.id), index: i, size: oldChunk.size, sha256: oldChunk.sha256 });
+      }
+      const oldIds = [...file.chunks.values()].map(c => Number(c.messageId)).filter(Boolean);
+      if (oldIds.length) await deleteTelegramMessages(oldIds);
+    } finally { await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {}); }
+    const renamed = { ...file, name: newName, chunks: newChunks, modified: new Date().toISOString() };
+    fileIndex.delete(file.name);
+    fileIndex.set(newName, renamed);
+    indexLoaded = true; indexLastRefresh = Date.now();
+    res.json({ ok: true, file: publicFile(renamed) });
+  } catch (error) { console.error("RENAME ERROR:", error); res.status(500).json({ error: error.message || "Rename failed" }); }
+});
 
 app.post("/api/share", requireAuth, async (req, res) => {
   try {
     const name = cleanName(req.body?.name);
-    const fileId = String(req.body?.fileId || req.query?.fileId || "");
-    const file = await findFile(name, fileId);
+    const file = await findFile(name, String(req.query?.fileId || ""));
     if (!file) return res.status(404).json({ error: "File not found" });
-    const ttlSeconds = Number(req.body?.ttlSeconds) || 7 * 86400;
-    const token = createShareToken(name, ttlSeconds, file.id);
+    const token = createShareToken(name, file.id, req.body?.ttlSeconds || 86400);
     const base = `${req.protocol}://${req.get("host")}`;
-    const expiresIn = Math.max(300, Math.min(ttlSeconds, 30 * 86400));
-    res.json({ ok: true, url: `${base}/s/${encodeURIComponent(token)}`, expiresIn, name: file.name, fileId: file.id });
+    res.json({ ok: true, url: `${base}/s/${encodeURIComponent(token)}`, expiresIn: 86400, name: file.name });
   } catch (error) {
     res.status(500).json({ error: error.message || "Could not create share link" });
   }
@@ -987,7 +984,7 @@ app.get(/^\/s\/([^/]+)$/, async (req, res) => {
     if (!file) return res.status(404).send("File not found");
     const safeName = file.name.replace(/[<>]/g, "");
     const payload = JSON.stringify({ name: safeName, size: file.size, type: mimeFor(file.name), url: `/api/shared-stream/${encodeURIComponent(token)}`, token }).replace(/</g, "\\u003c");
-    res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070b14"><title>${safeName}</title><style>body{margin:0;background:#070b14;color:#eef2ff;font-family:system-ui;display:grid;place-items:center;min-height:100vh;padding:24px;box-sizing:border-box}.card{width:min(920px,100%);padding:28px;border:1px solid #ffffff18;border-radius:28px;background:#ffffff08;backdrop-filter:blur(18px);box-shadow:0 30px 90px #0008}h1{font-size:clamp(20px,4vw,34px);margin:0 0 8px;word-break:break-word}.meta{color:#9aa7bf;margin-bottom:22px}video,audio,img,iframe{width:100%;max-height:70vh;border-radius:18px;background:#000;object-fit:contain}.btn{display:inline-flex;margin-top:18px;padding:12px 16px;border-radius:12px;background:#fff;color:#07101e;text-decoration:none;font-weight:750;border:0;cursor:pointer}.shade{position:fixed;inset:0;background:#0009;backdrop-filter:blur(10px);display:none;place-items:center;padding:18px}.box{width:min(420px,100%);background:#101a2b;border:1px solid #ffffff18;border-radius:22px;padding:24px;box-shadow:0 30px 100px #000}.box h2{margin:0 0 7px}.box p{color:#9aa7bf;font-size:13px}.box input{width:100%;height:46px;box-sizing:border-box;border-radius:12px;border:1px solid #ffffff18;background:#091321;color:#fff;padding:0 12px;margin:8px 0 12px}.err{color:#ffb5c0;font-size:12px;min-height:18px}</style></head><body><main class="card"><h1>${safeName}</h1><div class="meta">${formatBytes(file.size)} Â· ${mimeFor(file.name)}</div><div id="viewer"></div><button class="btn" id="downloadBtn">Download file</button></main><div class="shade" id="shade"><div class="box"><h2>Secure download</h2><p>Enter the download security password to continue.</p><input id="pw" type="password" autocomplete="off" placeholder="Security password"><div class="err" id="err"></div><button class="btn" id="unlock">Unlock & download</button></div></div><script>const f=${payload},v=document.getElementById('viewer'),u=f.url;if(f.type.startsWith('image/'))v.innerHTML='<img src="'+u+'">';else if(f.type.startsWith('video/'))v.innerHTML='<video src="'+u+'" controls playsinline preload="metadata"></video>';else if(f.type.startsWith('audio/'))v.innerHTML='<audio src="'+u+'" controls preload="metadata"></audio>';else if(f.type==='application/pdf'||f.type.startsWith('text/'))v.innerHTML='<iframe src="'+u+'" style="height:70vh"></iframe>';else v.innerHTML='<p style="color:#9aa7bf">Preview is not available for this file type.</p>';const sh=document.getElementById('shade');document.getElementById('downloadBtn').onclick=()=>sh.style.display='grid';document.getElementById('unlock').onclick=async()=>{const err=document.getElementById('err'),b=document.getElementById('unlock');b.disabled=true;b.textContent='Checkingâ€¦';err.textContent='';try{const r=await fetch('/api/shared-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:f.token,password:document.getElementById('pw').value})});const d=await r.json();if(!r.ok)throw Error(d.error||'Access denied');location.href='/s/'+encodeURIComponent(f.token)+'/download'}catch(e){err.textContent=e.message;b.disabled=false;b.textContent='Unlock & download'}};</script></body></html>`);
+    res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#070b14"><title>Cloud-Zen v4.0.4 — ${safeName}</title><style>body{margin:0;background:#070b14;color:#eef2ff;font-family:system-ui;display:grid;place-items:center;min-height:100vh;padding:24px;box-sizing:border-box}.card{width:min(920px,100%);padding:28px;border:1px solid #ffffff18;border-radius:28px;background:#ffffff08;backdrop-filter:blur(18px);box-shadow:0 30px 90px #0008}h1{font-size:clamp(20px,4vw,34px);margin:0 0 8px;word-break:break-word}.meta{color:#9aa7bf;margin-bottom:22px}video,audio,img,iframe{width:100%;max-height:70vh;border-radius:18px;background:#000;object-fit:contain}.btn{display:inline-flex;margin-top:18px;padding:12px 16px;border-radius:12px;background:#fff;color:#07101e;text-decoration:none;font-weight:750;border:0;cursor:pointer}.shade{position:fixed;inset:0;background:#0009;backdrop-filter:blur(10px);display:none;place-items:center;padding:18px}.box{width:min(420px,100%);background:#101a2b;border:1px solid #ffffff18;border-radius:22px;padding:24px;box-shadow:0 30px 100px #000}.box h2{margin:0 0 7px}.box p{color:#9aa7bf;font-size:13px}.box input{width:100%;height:46px;box-sizing:border-box;border-radius:12px;border:1px solid #ffffff18;background:#091321;color:#fff;padding:0 12px;margin:8px 0 12px}.err{color:#ffb5c0;font-size:12px;min-height:18px}</style></head><body><main class="card"><div style="font-weight:800;letter-spacing:.08em;color:#b8c7ff;font-size:12px;margin-bottom:8px">CLOUD-ZEN v4.0.4</div><h1>${safeName}</h1><div class="meta">${formatBytes(file.size)} Â· ${mimeFor(file.name)}</div><div id="viewer"></div><a class="btn" id="downloadBtn" href="/s/${encodeURIComponent(token)}/download">Download file</a></main><div class="shade" id="shade"><div class="box"><h2>Secure download</h2><p>Enter the download security password to continue.</p><input id="pw" type="password" autocomplete="off" placeholder="Security password"><div class="err" id="err"></div><button class="btn" id="unlock">Unlock & download</button></div></div><script>const f=${payload},v=document.getElementById('viewer'),u=f.url;if(f.type.startsWith('image/'))v.innerHTML='<img src="'+u+'">';else if(f.type.startsWith('video/'))v.innerHTML='<video src="'+u+'" controls playsinline preload="metadata"></video>';else if(f.type.startsWith('audio/'))v.innerHTML='<audio src="'+u+'" controls preload="metadata"></audio>';else if(f.type==='application/pdf'||f.type.startsWith('text/'))v.innerHTML='<iframe src="'+u+'" style="height:70vh"></iframe>';else v.innerHTML='<p style="color:#9aa7bf">Preview is not available for this file type.</p>';</script></body></html>`);
   } catch (error) { res.status(500).send(error.message || "Share page failed"); }
 });
 
@@ -1009,7 +1006,6 @@ app.get(/^\/s\/([^/]+)\/download$/, async (req, res) => {
     const token = decodeURIComponent(req.params[0]);
     const data = verifyShareToken(token);
     if (!data) return res.status(410).send("Share link expired");
-    if (!validSharedDownload(token, req)) return res.status(403).send("Download access requires the security password.");
     const file = await findFile(data.n, String(data.id || ""));
     if (!file) return res.status(404).send("File not found");
     await streamFileToResponse(req, res, file, false);
@@ -1024,8 +1020,7 @@ app.get(/^\/s\/([^/]+)\/download$/, async (req, res) => {
 app.delete("/api/files", requireAuth, requireDeletePassword, async (req, res) => {
   try {
     const name = cleanName(req.body?.name);
-    const fileId = String(req.body?.fileId || req.query?.fileId || "");
-    const file = await findFile(name, fileId);
+    const file = await findFile(name, String(req.query?.fileId || ""));
     if (!file) return res.status(404).json({ error: "File not found" });
 
     const client = await getTelegramClient();
@@ -1110,12 +1105,8 @@ async function shutdown(signal) {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
-if (process.env.VERCEL) {
-  module.exports = app;
-} else {
-  app.listen(PORT, HOST, () => {
-    console.log(`[Cloud-Zen] Server running on ${HOST}:${PORT}`);
-    console.log(`[Cloud-Zen] Chunk size: ${formatBytes(CHUNK_SIZE)}`);
-  });
-}
+app.listen(PORT, HOST, () => {
+  console.log(`[Cloud-Zen] Server running on ${HOST}:${PORT}`);
+  console.log(`[Cloud-Zen] Chunk size: ${formatBytes(CHUNK_SIZE)}`);
+});
   
